@@ -30,6 +30,9 @@ class FileScanner:
         rc = config.get("regcon", {})
         self.encoding = rc.get("encoding", "utf-8")
         self.fallback_encoding = rc.get("fallback_encoding", "cp1251")
+        self._progress_batch = int(rc.get("progress_batch_bytes", 65536))
+        self._read_buffer = int(rc.get("read_buffer_bytes", 1048576))
+        self._byte_buf = 0
     def _scan_cell(
         self,
         cell_text: str,
@@ -54,14 +57,30 @@ class FileScanner:
     ) -> None:
         check_cancelled(cancel)
         if progress is not None:
-            progress.add_bytes(len(line.encode("utf-8", errors="replace")))
+            self._byte_buf += len(line) + 1
+            if self._byte_buf >= self._progress_batch:
+                progress.add_bytes(self._byte_buf)
+                self._byte_buf = 0
             progress.tick_line()
+
+    def _flush_progress(self, progress: JobProgress | None) -> None:
+        if progress is not None and self._byte_buf > 0:
+            progress.add_bytes(self._byte_buf)
+            self._byte_buf = 0
 
     def _open_text(self, path: Path):
         try:
-            return path.open(encoding=self.encoding, errors="replace")
+            return path.open(
+                encoding=self.encoding,
+                errors="replace",
+                buffering=self._read_buffer,
+            )
         except OSError:
-            return path.open(encoding=self.fallback_encoding, errors="replace")
+            return path.open(
+                encoding=self.fallback_encoding,
+                errors="replace",
+                buffering=self._read_buffer,
+            )
 
     def scan_text_file(
         self,
@@ -70,8 +89,29 @@ class FileScanner:
         cancel: CancelCallback = None,
         progress: JobProgress | None = None,
     ) -> list[Finding]:
-        findings: list[Finding] = []
         file_path = str(path)
+        file_size = path.stat().st_size if path.exists() else 0
+        self._pan.begin_file(file_size)
+        if self._pan.wants_parallel_scan(file_size):
+            from regcon.services.pan_parallel import scan_text_file_parallel
+
+            def _on_chunk(_n: int) -> None:
+                if progress is not None:
+                    progress._pulse(force=True)
+
+            findings = scan_text_file_parallel(
+                path,
+                self.config,
+                file_path,
+                self._pan.parallel_workers(),
+                self._pan.parallel_chunk_lines(),
+                cancel,
+                _on_chunk,
+            )
+            self._flush_progress(progress)
+            return findings
+
+        findings: list[Finding] = []
         with self._open_text(path) as handle:
             for line_no, line in enumerate(handle, start=1):
                 self._tick(line, cancel, progress)
@@ -86,6 +126,7 @@ class FileScanner:
                         self._secrets,
                     )
                 )
+        self._flush_progress(progress)
         return findings
 
     def scan_csv_file(
@@ -118,6 +159,7 @@ class FileScanner:
                     self._scan_cell(
                         str(cell), file_path, line_no, col_idx, label, findings
                     )
+        self._flush_progress(progress)
         return findings
 
     def _scan_csv_pandas(
@@ -158,6 +200,7 @@ class FileScanner:
                     self._scan_cell(
                         str(cell_text), file_path, line_no, col_idx, label, findings
                     )
+        self._flush_progress(progress)
         return findings
 
     def scan_excel_file(
@@ -193,6 +236,7 @@ class FileScanner:
                         )
         finally:
             workbook.close()
+        self._flush_progress(progress)
         return findings
 
     def scan_file(
@@ -231,6 +275,7 @@ class FileScanner:
                 self._scan_cell(
                     str(value), file_path, line_no, col_idx, label, findings
                 )
+        self._flush_progress(progress)
         return findings
 
     @staticmethod

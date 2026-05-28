@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import re
 from typing import Iterator
 
 from regcon.detectors import IpDetector, PanDetector, SecretDetector
 from regcon.models import Finding
-
-_PWD_HINTS = ("password", "passwd", "pwd", "secret", "token")
+_PWD_HINT_RE = re.compile(
+    r"password|passwd|pwd|secret|token",
+    re.IGNORECASE,
+)
 
 
 def scan_line_with_detectors(
@@ -17,12 +20,12 @@ def scan_line_with_detectors(
     secrets: SecretDetector | None,
 ) -> Iterator[Finding]:
     if pan is not None and pan.enabled:
-        if sum(ch.isdigit() for ch in line) >= 13:
-            yield from pan.scan_line(line, file_path, line_no)
+        yield from pan.scan_line(line, file_path, line_no)
+
     if ip is not None and ip.enabled:
         if "." in line or ":" in line:
             yield from ip.scan_line(line, file_path, line_no)
+
     if secrets is not None and secrets.enabled:
-        lower = line.lower()
-        if any(hint in lower for hint in _PWD_HINTS):
+        if _PWD_HINT_RE.search(line):
             yield from secrets.scan_line(line, file_path, line_no)

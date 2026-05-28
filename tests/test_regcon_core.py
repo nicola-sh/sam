@@ -19,12 +19,14 @@ def test_luhn_invalid():
 
 def test_rejects_date_as_pan():
     digits = "20260521143000"
-    assert not is_plausible_pan(digits, digits, "2026-05-21 14:30:00", 0, len(digits))
+    line = "2026-05-21 14:30:00"
+    assert not is_plausible_pan(digits, line, 0, len(digits))
 
 
 def test_rejects_date_plus_zeros():
-    text = "2026052100000000"
-    assert not is_plausible_pan(text, text, "timestamp 2026052100000000", 11, 27)
+    digits = "2026052100000000"
+    line = "timestamp 2026052100000000"
+    assert not is_plausible_pan(digits, line, 11, 27)
 
 
 def test_context_30_chars():
@@ -45,6 +47,7 @@ def test_finds_pan_with_letters_around():
         }
     }
     det = PanDetector(cfg)
+    det.begin_file(0)
     line = "token=4111A111111111111Z field"
     hits = list(det.scan_line(line, "f.log", 1))
     assert hits and len(_digits_only(hits[0].matched_text)) >= 13
@@ -62,6 +65,7 @@ def test_finds_grouped_pan():
         }
     }
     det = PanDetector(cfg)
+    det.begin_file(0)
     line = "pay card 4111 1111 1111 1111 ok"
     hits = list(det.scan_line(line, "f.log", 1))
     assert len(hits) == 1
@@ -71,6 +75,75 @@ def test_mask_pan_keeps_edges():
     masked = mask_pan_text("4111111111111111")
     assert masked.startswith("411111")
     assert masked.endswith("1111")
+
+
+def test_bulk_profile_finds_regex_pan():
+    cfg = {
+        "pan": {
+            "enabled": True,
+            "use_luhn": True,
+            "scan_profile": "bulk",
+            "use_grouped_scan": True,
+            "bin_line_filter": False,
+            "regex_list": [],
+        }
+    }
+    det = PanDetector(cfg)
+    det.begin_file(0)
+    line = "pay 4111 1111 1111 1111 end"
+    hits = list(det.scan_line(line, "f.log", 1))
+    assert len(hits) == 1
+
+
+def test_bin_filter_skips_line_without_hint():
+    cfg = {
+        "pan": {
+            "enabled": True,
+            "scan_profile": "bulk",
+            "bin_line_filter": True,
+            "bin_line_hints": ["9112"],
+            "regex_list": [],
+            "use_grouped_scan": False,
+        }
+    }
+    det = PanDetector(cfg)
+    det.begin_file(0)
+    line = "card 4111 1111 1111 1111"
+    assert list(det.scan_line(line, "f.log", 1)) == []
+
+
+def test_auto_bulk_on_large_file():
+    cfg = {
+        "pan": {
+            "enabled": True,
+            "scan_profile": "auto",
+            "auto_bulk_file_mb": 1,
+            "regex_list": [],
+            "use_grouped_scan": True,
+            "bin_line_filter": False,
+        }
+    }
+    det = PanDetector(cfg)
+    det.begin_file(2 * 1024 * 1024)
+    assert det.active_profile == "bulk"
+
+
+def test_embedded_auto_skips_plain_digit_line_without_match():
+    """auto: без букв — нет тяжёлого перебора встроенных цифр."""
+    cfg = {
+        "pan": {
+            "enabled": True,
+            "use_luhn": True,
+            "use_grouped_scan": True,
+            "scan_embedded_digits": "auto",
+            "regex_list": [],
+        }
+    }
+    det = PanDetector(cfg)
+    det.begin_file(0)
+    line = "x" + "9" * 200 + "x"
+    hits = list(det.scan_line(line, "f.log", 1))
+    assert hits == []
 
 
 def test_apply_replacements():
