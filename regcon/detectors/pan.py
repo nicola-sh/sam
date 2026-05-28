@@ -130,50 +130,10 @@ class PanDetector:
             prefix_path, extra, self._prefix_len
         )
         self._prefix_line_filter = bool(pan_cfg.get("prefix_line_filter", True))
-        self._profile_setting = str(pan_cfg.get("scan_profile", "auto")).lower()
-        self._auto_bulk_bytes = int(pan_cfg.get("auto_bulk_file_mb", 20)) * 1024 * 1024
-        self._active_profile = "normal"
-        workers = pan_cfg.get("parallel_workers", "auto")
-        if workers == "auto":
-            import os
-
-            cpu = os.cpu_count() or 2
-            workers = min(8, max(2, cpu - 1))
-        self._parallel_workers = int(workers)
-        self._parallel_chunk = int(pan_cfg.get("parallel_chunk_lines", 250_000))
-        self._parallel_min_bytes = int(
-            pan_cfg.get("parallel_min_file_mb", 20)
-        ) * 1024 * 1024
-
-    def begin_file(self, file_size_bytes: int) -> None:
-        if self._profile_setting == "auto":
-            self._active_profile = (
-                "bulk" if file_size_bytes >= self._auto_bulk_bytes else "normal"
-            )
-        else:
-            self._active_profile = self._profile_setting
-
-    @property
-    def active_profile(self) -> str:
-        return self._active_profile
-
-    def wants_parallel_scan(self, file_size_bytes: int) -> bool:
-        if self._parallel_workers <= 0:
-            return False
-        return file_size_bytes >= self._parallel_min_bytes
 
     @property
     def prefix_count(self) -> int:
         return self._prefix_index.count
-
-    def parallel_workers(self) -> int:
-        return self._parallel_workers
-
-    def parallel_chunk_lines(self) -> int:
-        return self._parallel_chunk
-
-    def parallel_min_bytes(self) -> int:
-        return self._parallel_min_bytes
 
     def scan_line(
         self,
