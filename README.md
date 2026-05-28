@@ -17,6 +17,10 @@
 | Безопасность | **Шифрование** секретов, **полный аудит** действий в файл |
 | UX | **Удобный, простой** интерфейс — минимум шагов, понятные подписи |
 
+> **Офлайн-библиотеки:** полный список из 59 локальных пакетов (`DATA\req.txt`), установка без интернета и привязка к SAM — в [`docs/AVAILABLE_LIBRARIES.md`](docs/AVAILABLE_LIBRARIES.md). Скрипт установки: `scripts\install_offline.bat`.
+
+> **RegCon** (отдельное приложение): обезличивание логов (PAN, IP, пароли), подтверждение замен, CSV→Excel — [`regcon/README.md`](regcon/README.md).
+
 ---
 
 ## Целевая модель данных
@@ -330,7 +334,31 @@ ftp_targets:
 
 ---
 
-## Стек: возможные библиотеки
+## Стек: библиотеки
+
+### Доступные сейчас (офлайн, Windows)
+
+На машине разработки уже подготовлен набор wheels — см. **[`docs/AVAILABLE_LIBRARIES.md`](docs/AVAILABLE_LIBRARIES.md)**.
+
+| Задача SAM | Из доступного набора |
+|------------|----------------------|
+| SFTP | **paramiko** 3.5.1 |
+| Веб-UI, пользователи | **Django** 5.1.7 |
+| Десктоп-UI | **PySimpleGUI**, **PyQt6**, **tkcalendar** |
+| Пароли | **bcrypt** |
+| Vault | **cryptography**, **pycryptodomex** |
+| Архивы | **pyzipper**, **pyminizip** |
+| Конфиг | **PyYAML** |
+| Даты в логах | **python-dateutil**, **pytz** |
+| Большие логи | **pandas**, **numpy** |
+| Сборка .exe | **pyinstaller** |
+| FTP | stdlib **ftplib** |
+
+Установка: положить файлы в `DATA\wheels\`, выполнить `scripts\install_offline.bat`.
+
+### Дополнительно (если появится доступ к PyPI)
+
+Ниже — кандидаты, которых **нет** в текущем офлайн-наборе, но которые можно добавить позже.
 
 ### SSH / SFTP
 
@@ -417,17 +445,17 @@ ftp_targets:
 | [Typer](https://typer.tiangolo.com/) | `sam init`, `users create` | Не основной UI |
 | [Rich](https://rich.readthedocs.io/) | Вывод в консоль | Диагностика |
 
-### Минимальный набор для старта
+### Минимальный набор для старта (из офлайн-набора)
 
 ```
-fastapi uvicorn jinja2 htmx (static)
-paramiko
-cryptography passlib argon2-cffi
-sqlalchemy aiosqlite
-pydantic pyyaml python-dateutil structlog
-# ftplib zipfile tarfile re datetime json — stdlib
-pytest httpx ruff
+paramiko cryptography bcrypt PyNaCl
+Django
+PyYAML python-dateutil pytz
+pyzipper
+# ftplib zipfile tarfile re datetime json logging sqlite3 — stdlib
 ```
+
+Полная установка: `DATA\requirements-offline.txt` + [`docs/AVAILABLE_LIBRARIES.md`](docs/AVAILABLE_LIBRARIES.md).
 
 ---
 
@@ -449,12 +477,15 @@ pytest httpx ruff
 
 | Компонент | Статус |
 |-----------|--------|
-| README / описание | В работе |
+| README / описание | Готово |
+| Офлайн-библиотеки (`DATA/req.txt`) | Манифест готов |
+| Документация установки | [`docs/AVAILABLE_LIBRARIES.md`](docs/AVAILABLE_LIBRARIES.md) |
 | Макет UI | Описан (wireframe) |
 | Пользователи и аудит | Спецификация готова |
 | Vault / шифрование | Спецификация готова |
 | Обработка логов 1–4 ГБ | Спецификация готова |
-| Код приложения | Не начат |
+| RegCon (обезличивание) | Реализован — `python -m regcon` |
+| Код SAM | Не начат |
 
 ---
 
