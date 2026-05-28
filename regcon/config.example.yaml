@@ -3,13 +3,15 @@ regcon:
   encoding: utf-8
   fallback_encoding: cp1251
   audit_log: regcon_actions.log
+  progress_every_lines: 5000
+  max_table_rows: 5000
 
 pan:
   enabled: true
   use_luhn: true
   mask_keep_first: 6
   mask_keep_last: 4
-  generic_16_digit: true
+  use_grouped_scan: true
   regex_list:
     - '9112\s?39[0-9]{2}\s?[0-9]{4}\s?[0-9]{4}'
 

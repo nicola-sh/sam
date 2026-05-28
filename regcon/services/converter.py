@@ -5,6 +5,7 @@ from typing import Callable
 
 from regcon.config.settings import regcon_cfg
 from regcon.formatters.excel_styler import style_workbook
+from regcon.util.cancel import CancelCallback, check_cancelled
 
 try:
     import pandas as pd
@@ -17,6 +18,7 @@ def csv_to_excel(
     output_dir: Path,
     config: dict,
     on_progress: Callable[[int], None] | None = None,
+    cancel: CancelCallback = None,
 ) -> Path:
     if pd is None:
         raise RuntimeError("pandas не установлен — нужен для CSV → Excel")
@@ -31,9 +33,11 @@ def csv_to_excel(
         frame = pd.read_csv(
             csv_path, dtype=str, keep_default_na=False, encoding=fallback
         )
+    check_cancelled(cancel)
     if on_progress:
         on_progress(50)
     frame.to_excel(target, index=False, engine="openpyxl")
+    check_cancelled(cancel)
     if on_progress:
         on_progress(80)
     style_workbook(target, config.get("excel", {}))

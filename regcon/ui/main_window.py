@@ -83,12 +83,22 @@ class MainWindow(QMainWindow):
         self.files: list[str] = []
         self.findings: list[Finding] = []
         self.worker: Worker | None = None
+        self._table_limit = int(
+            self.config.get("regcon", {}).get("max_table_rows", 5000)
+        )
+        self.setAcceptDrops(True)
         self._build_ui()
 
     def _build_ui(self) -> None:
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
+
+        drop_hint = QLabel(
+            "Перетащите файлы в окно или выберите через «Обзор…»"
+        )
+        drop_hint.setStyleSheet("color: #555;")
+        root.addWidget(drop_hint)
 
         files_row = QHBoxLayout()
         self.files_label = QLabel("Файлы не выбраны")
@@ -152,6 +162,9 @@ class MainWindow(QMainWindow):
         action_row = QHBoxLayout()
         self.start_btn = QPushButton("Старт")
         self.start_btn.clicked.connect(self._on_start)
+        self.stop_btn = QPushButton("Остановить")
+        self.stop_btn.setEnabled(False)
+        self.stop_btn.clicked.connect(self._on_stop)
         self.apply_btn = QPushButton("Применить маску")
         self.apply_btn.setEnabled(False)
         self.apply_btn.clicked.connect(self._on_apply_mask)
@@ -160,6 +173,7 @@ class MainWindow(QMainWindow):
         self.deselect_all_btn = QPushButton("Снять все")
         self.deselect_all_btn.clicked.connect(lambda: self._set_all_findings(False))
         action_row.addWidget(self.start_btn)
+        action_row.addWidget(self.stop_btn)
         action_row.addWidget(self.apply_btn)
         action_row.addWidget(self.select_all_btn)
         action_row.addWidget(self.deselect_all_btn)
@@ -199,6 +213,29 @@ class MainWindow(QMainWindow):
         }
         return mapping[self.mode_combo.currentIndex()]
 
+    def dragEnterEvent(self, event) -> None:  # noqa: N802
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event) -> None:  # noqa: N802
+        paths: list[str] = []
+        for url in event.mimeData().urls():
+            local = url.toLocalFile()
+            if local and Path(local).is_file():
+                paths.append(local)
+        if paths:
+            self._add_files(paths)
+        event.acceptProposedAction()
+
+    def _add_files(self, paths: list[str]) -> None:
+        merged = list(dict.fromkeys(self.files + paths))
+        self.files = merged
+        self.files_label.setText(
+            f"Выбрано файлов: {len(merged)} — "
+            + ", ".join(Path(p).name for p in merged[:5])
+            + (" …" if len(merged) > 5 else "")
+        )
+
     def _browse_files(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(
             self,
@@ -207,11 +244,7 @@ class MainWindow(QMainWindow):
             "Логи и таблицы (*.txt *.log *.csv *.xlsx *.xls *.json);;Все (*.*)",
         )
         if paths:
-            self.files = paths
-            self.files_label.setText(
-                f"Выбрано файлов: {len(paths)} — " + ", ".join(Path(p).name for p in paths[:5])
-                + (" …" if len(paths) > 5 else "")
-            )
+            self._add_files(paths)
 
     def _clear_files(self) -> None:
         self.files = []
@@ -241,7 +274,21 @@ class MainWindow(QMainWindow):
 
     def _set_busy(self, busy: bool) -> None:
         self.start_btn.setEnabled(not busy)
+        self.stop_btn.setEnabled(busy)
         self.apply_btn.setEnabled((not busy) and bool(self.findings))
+
+    def _connect_worker(self, worker: Worker) -> None:
+        worker.progress.connect(self.progress.setValue)
+        worker.log.connect(self._append_log)
+        worker.error.connect(self._on_worker_error)
+        worker.cancelled.connect(self._on_worker_cancelled)
+        worker.scan_done.connect(self._on_scan_done)
+        worker.finished_ok.connect(self._on_worker_finished)
+
+    def _on_stop(self) -> None:
+        if self.worker and self.worker.isRunning():
+            self._append_log("Запрошена остановка…")
+            self.worker.requestInterruption()
 
     def _on_start(self) -> None:
         if not self.files:
@@ -266,11 +313,7 @@ class MainWindow(QMainWindow):
             output_dir=self.output_dir,
             findings=findings_payload,
         )
-        self.worker.progress.connect(self.progress.setValue)
-        self.worker.log.connect(self._append_log)
-        self.worker.error.connect(self._on_worker_error)
-        self.worker.scan_done.connect(self._on_scan_done)
-        self.worker.finished_ok.connect(self._on_worker_finished)
+        self._connect_worker(self.worker)
         self.worker.start()
 
     def _on_apply_mask(self) -> None:
@@ -287,10 +330,7 @@ class MainWindow(QMainWindow):
             output_dir=self.output_dir,
             findings=[f.to_dict() for f in self.findings],
         )
-        self.worker.progress.connect(self.progress.setValue)
-        self.worker.log.connect(self._append_log)
-        self.worker.error.connect(self._on_worker_error)
-        self.worker.finished_ok.connect(self._on_worker_finished)
+        self._connect_worker(self.worker)
         self.worker.start()
 
     def _on_scan_done(self, payload: list[dict[str, Any]]) -> None:
@@ -300,9 +340,16 @@ class MainWindow(QMainWindow):
         self._append_log(f"Сканирование завершено. Совпадений: {len(self.findings)}")
 
     def _populate_table(self) -> None:
+        display = self.findings[: self._table_limit]
+        if len(self.findings) > self._table_limit:
+            self._append_log(
+                f"В таблице первые {self._table_limit} из {len(self.findings)} "
+                "(все учитываются при маскировании)."
+            )
+        self.table.setUpdatesEnabled(False)
         self.table.blockSignals(True)
-        self.table.setRowCount(len(self.findings))
-        for row, finding in enumerate(self.findings):
+        self.table.setRowCount(len(display))
+        for row, finding in enumerate(display):
             check = QTableWidgetItem()
             check.setFlags(_USER_CHECKABLE | _ENABLED)
             check.setCheckState(_CHECKED if finding.selected else _UNCHECKED)
@@ -317,6 +364,7 @@ class MainWindow(QMainWindow):
             self.table.setItem(row, 3, QTableWidgetItem(loc))
             self.table.setItem(row, 4, QTableWidgetItem(finding.matched_text))
         self.table.blockSignals(False)
+        self.table.setUpdatesEnabled(True)
 
     def _on_cell_changed(self, row: int, column: int) -> None:
         if column != 0 or row >= len(self.findings):
@@ -334,9 +382,11 @@ class MainWindow(QMainWindow):
 
     def _set_all_findings(self, selected: bool) -> None:
         state = _CHECKED if selected else _UNCHECKED
-        self.table.blockSignals(True)
-        for row, finding in enumerate(self.findings):
+        for finding in self.findings:
             finding.selected = selected
+        self.table.blockSignals(True)
+        rows = min(self.table.rowCount(), len(self.findings))
+        for row in range(rows):
             item = self.table.item(row, 0)
             if item:
                 item.setCheckState(state)
@@ -345,6 +395,10 @@ class MainWindow(QMainWindow):
     def _on_worker_error(self, message: str) -> None:
         self._set_busy(False)
         QMessageBox.critical(self, "Ошибка", message)
+
+    def _on_worker_cancelled(self) -> None:
+        self._set_busy(False)
+        self.progress.setValue(0)
 
     def _on_worker_finished(self) -> None:
         self._set_busy(False)
