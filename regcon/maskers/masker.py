@@ -82,14 +82,24 @@ def findings_to_replacements(
     replacements: list[tuple[int, int, str]] = []
     for finding in findings:
         start = finding.column
-        end = start + len(finding.matched_text)
-        if end > len(line):
+        end = finding.span_end or start + len(finding.matched_text)
+        if start < 0 or end > len(line) or start >= end:
             continue
-        if line[start:end] != finding.matched_text:
-            idx = line.find(finding.matched_text, max(0, start - 5))
-            if idx < 0:
-                continue
-            start, end = idx, idx + len(finding.matched_text)
-        masked = mask_match(finding.matched_text, finding.match_type, config)
+        fragment = line[start:end]
+        if finding.match_type == "PAN":
+            masked = mask_pan_text(
+                fragment,
+                keep_first=int(config.get("pan", {}).get("mask_keep_first", 6)),
+                keep_last=int(config.get("pan", {}).get("mask_keep_last", 4)),
+            )
+        else:
+            if fragment != finding.matched_text:
+                idx = line.find(finding.matched_text, max(0, start - 8))
+                if idx >= 0:
+                    start, end = idx, idx + len(finding.matched_text)
+                    fragment = line[start:end]
+                else:
+                    continue
+            masked = mask_match(fragment, finding.match_type, config)
         replacements.append((start, end, masked))
     return replacements

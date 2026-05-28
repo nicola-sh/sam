@@ -18,7 +18,7 @@ try:
         QCheckBox,
         QComboBox,
         QFileDialog,
-        QGroupBox,
+        QFrame,
         QHBoxLayout,
         QHeaderView,
         QLabel,
@@ -42,7 +42,7 @@ except ImportError:  # pragma: no cover
         QCheckBox,
         QComboBox,
         QFileDialog,
-        QGroupBox,
+        QFrame,
         QHBoxLayout,
         QHeaderView,
         QLabel,
@@ -78,7 +78,7 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("RegCon")
-        self.resize(1180, 700)
+        self.resize(1024, 620)
         config_path = Path(__file__).resolve().parent.parent / "config.yaml"
         self.config = load_config(config_path)
         self.files: list[str] = []
@@ -91,86 +91,89 @@ class MainWindow(QMainWindow):
         self.setAcceptDrops(True)
         self._build_ui()
 
+    def _hline(self) -> QFrame:
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine if _PYQT6 else QFrame.HLine)
+        line.setFrameShadow(QFrame.Shadow.Sunken if _PYQT6 else QFrame.Sunken)
+        return line
+
     def _build_ui(self) -> None:
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
-        root.setSpacing(6)
-        root.setContentsMargins(10, 8, 10, 8)
+        root.setSpacing(4)
+        root.setContentsMargins(8, 6, 8, 6)
 
-        files_group = QGroupBox("Файлы")
-        files_layout = QHBoxLayout(files_group)
-        self.files_label = QLabel("Нет файлов")
-        self.files_label.setWordWrap(True)
-        self.files_label.setToolTip(
-            "Перетащите файлы в окно или нажмите «Добавить»"
-        )
-        add_btn = QPushButton("Добавить")
+        top = QHBoxLayout()
+        top.setSpacing(6)
+        add_btn = QPushButton("+ Файлы")
         add_btn.setObjectName("secondaryBtn")
         add_btn.setToolTip("Выбрать .txt, .log, .csv, .xlsx …")
         add_btn.clicked.connect(self._browse_files)
-        clear_btn = QPushButton("Очистить")
+        clear_btn = QPushButton("×")
         clear_btn.setObjectName("secondaryBtn")
+        clear_btn.setFixedWidth(32)
+        clear_btn.setToolTip("Очистить список")
         clear_btn.clicked.connect(self._clear_files)
-        files_layout.addWidget(self.files_label, stretch=1)
-        files_layout.addWidget(add_btn)
-        files_layout.addWidget(clear_btn)
-        root.addWidget(files_group)
-
-        search_group = QGroupBox("Искать")
-        search_row = QHBoxLayout(search_group)
+        self.files_label = QLabel("Нет файлов")
+        self.files_label.setWordWrap(True)
+        self.files_label.setToolTip("Перетащите файлы в окно")
         pan_cfg = self.config.get("pan", {})
         ip_cfg = self.config.get("ip", {})
         pwd_cfg = self.config.get("passwords", {})
         self.chk_pan = QCheckBox("PAN")
         self.chk_pan.setChecked(pan_cfg.get("enabled", True))
-        self.chk_pan.setToolTip("Номера карт, в т.ч. среди букв и символов (Luhn)")
+        self.chk_pan.setToolTip("Карты (Luhn); в таблице только цифры")
         self.chk_ip = QCheckBox("IP")
         self.chk_ip.setChecked(ip_cfg.get("enabled", True))
-        self.chk_ip.setToolTip("IPv4 и IPv6")
         self.chk_pwd = QCheckBox("Пароли")
         self.chk_pwd.setChecked(pwd_cfg.get("enabled", True))
-        self.chk_pwd.setToolTip("password=, secret= и т.п.")
-        search_row.addWidget(self.chk_pan)
-        search_row.addWidget(self.chk_ip)
-        search_row.addWidget(self.chk_pwd)
-        search_row.addStretch()
-        root.addWidget(search_group)
+        top.addWidget(add_btn)
+        top.addWidget(clear_btn)
+        top.addWidget(self.files_label, stretch=1)
+        top.addWidget(self.chk_pan)
+        top.addWidget(self.chk_ip)
+        top.addWidget(self.chk_pwd)
+        root.addLayout(top)
 
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_mask_tab(), "Обезличивание")
         self.tabs.addTab(self._build_excel_tab(), "CSV → Excel")
         root.addWidget(self.tabs, stretch=1)
 
+        root.addWidget(self._hline())
+
         out_row = QHBoxLayout()
-        self.out_label = QLabel(str(Path.home() / "regcon-output"))
-        self.out_label.setWordWrap(True)
-        self.output_dir = str(Path.home() / "regcon-output")
-        out_btn = QPushButton("Папка…")
+        out_row.setSpacing(6)
+        out_btn = QPushButton("…")
         out_btn.setObjectName("secondaryBtn")
-        out_btn.setToolTip("Куда сохранять результаты")
+        out_btn.setFixedWidth(32)
+        out_btn.setToolTip("Папка результатов")
         out_btn.clicked.connect(self._browse_output)
-        open_btn = QPushButton("Открыть")
+        open_btn = QPushButton("↗")
         open_btn.setObjectName("secondaryBtn")
+        open_btn.setFixedWidth(32)
+        open_btn.setToolTip("Открыть папку")
         open_btn.clicked.connect(self._open_output_dir)
-        out_row.addWidget(QLabel("Результат:"))
+        self.out_label = QLabel(str(Path.home() / "regcon-output"))
+        self.output_dir = str(Path.home() / "regcon-output")
+        self.out_label.setToolTip(self.output_dir)
+        out_row.addWidget(QLabel("→"))
         out_row.addWidget(self.out_label, stretch=1)
         out_row.addWidget(out_btn)
         out_row.addWidget(open_btn)
         root.addLayout(out_row)
 
         prog_row = QHBoxLayout()
+        prog_row.setSpacing(6)
         self.progress = QProgressBar()
         self.progress.setFormat("%p%")
+        self.progress.setFixedHeight(18)
         self.progress_label = QLabel("—")
         self.progress_label.setObjectName("progressLabel")
-        self.progress_label.setAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-        )
         self.stop_btn = QPushButton("Стоп")
         self.stop_btn.setObjectName("stopBtn")
         self.stop_btn.setEnabled(False)
-        self.stop_btn.setToolTip("Прервать текущую операцию")
         self.stop_btn.clicked.connect(self._on_stop)
         prog_row.addWidget(self.progress, stretch=1)
         prog_row.addWidget(self.progress_label)
@@ -180,102 +183,87 @@ class MainWindow(QMainWindow):
         self.log_view = QTextEdit()
         self.log_view.setObjectName("logView")
         self.log_view.setReadOnly(True)
-        self.log_view.setMaximumHeight(100)
+        self.log_view.setMaximumHeight(72)
         root.addWidget(self.log_view)
 
     def _build_mask_tab(self) -> QWidget:
         tab = QWidget()
         layout = QVBoxLayout(tab)
-        layout.setSpacing(6)
-        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(4)
+        layout.setContentsMargins(6, 6, 6, 6)
 
         row1 = QHBoxLayout()
-        self.btn_scan = QPushButton("① Найти")
-        self.btn_scan.setToolTip(
-            "Сканировать файлы и показать PAN, IP, пароли в таблице"
-        )
+        self.btn_scan = QPushButton("Найти")
+        self.btn_scan.setToolTip("Сканировать и показать совпадения")
         self.btn_scan.clicked.connect(self._on_scan)
-        row1.addWidget(self.btn_scan)
-        row1.addStretch()
-        layout.addLayout(row1)
-
-        tools = QHBoxLayout()
+        self.btn_save_masked = QPushButton("Сохранить _masked")
+        self.btn_save_masked.setEnabled(False)
+        self.btn_save_masked.setToolTip("Обезличить отмеченные строки")
+        self.btn_save_masked.clicked.connect(self._on_save_masked)
         self.filter_combo = QComboBox()
-        self.filter_combo.addItems(["Все типы", "PAN", "IP", "PASSWORD"])
-        self.filter_combo.setToolTip("Фильтр и сортировка таблицы по типу")
+        self.filter_combo.addItems(["Все", "PAN", "IP", "PASSWORD"])
+        self.filter_combo.setToolTip("Фильтр таблицы")
         self.filter_combo.currentIndexChanged.connect(self._populate_table)
-        self.select_all_btn = QPushButton("Все")
+        self.select_all_btn = QPushButton("✓")
         self.select_all_btn.setObjectName("secondaryBtn")
-        self.select_all_btn.setToolTip("Отметить все видимые строки")
+        self.select_all_btn.setFixedWidth(36)
+        self.select_all_btn.setToolTip("Отметить все видимые")
         self.select_all_btn.clicked.connect(lambda: self._set_all_findings(True))
-        self.deselect_all_btn = QPushButton("Снять")
+        self.deselect_all_btn = QPushButton("○")
         self.deselect_all_btn.setObjectName("secondaryBtn")
+        self.deselect_all_btn.setFixedWidth(36)
+        self.deselect_all_btn.setToolTip("Снять отметки")
         self.deselect_all_btn.clicked.connect(lambda: self._set_all_findings(False))
         self.findings_count_label = QLabel("0")
-        tools.addWidget(QLabel("Показать:"))
-        tools.addWidget(self.filter_combo)
-        tools.addWidget(self.select_all_btn)
-        tools.addWidget(self.deselect_all_btn)
-        tools.addStretch()
-        tools.addWidget(self.findings_count_label)
-        layout.addLayout(tools)
+        row1.addWidget(self.btn_scan)
+        row1.addWidget(self.btn_save_masked)
+        row1.addStretch()
+        row1.addWidget(QLabel("Фильтр:"))
+        row1.addWidget(self.filter_combo)
+        row1.addWidget(self.select_all_btn)
+        row1.addWidget(self.deselect_all_btn)
+        row1.addWidget(self.findings_count_label)
+        layout.addLayout(row1)
 
         self.table = QTableWidget(0, 7)
         self.table.setHorizontalHeaderLabels(
-            [
-                "✓",
-                "Тип",
-                "Файл",
-                "Строка",
-                "…30 до",
-                "Найдено",
-                "30 после…",
-            ]
+            ["✓", "Тип", "Файл", "Стр.", "…30", "Найдено", "30…"]
         )
         header = self.table.horizontalHeader()
+        header.setSectionResizeMode(2, _STRETCH)
         header.setSectionResizeMode(4, _STRETCH)
         header.setSectionResizeMode(5, _STRETCH)
         header.setSectionResizeMode(6, _STRETCH)
-        self.table.setToolTip("Контекст ±30 символов вокруг совпадения")
+        self.table.verticalHeader().setVisible(False)
         self.table.cellChanged.connect(self._on_cell_changed)
         layout.addWidget(self.table, stretch=1)
-
-        self.btn_save_masked = QPushButton("② Сохранить обезличенные копии")
-        self.btn_save_masked.setEnabled(False)
-        self.btn_save_masked.setToolTip(
-            "Записать файлы с суффиксом _masked; исходники не трогаются"
-        )
-        self.btn_save_masked.clicked.connect(self._on_save_masked)
-        layout.addWidget(self.btn_save_masked)
         return tab
 
     def _build_excel_tab(self) -> QWidget:
         tab = QWidget()
         layout = QVBoxLayout(tab)
-        layout.setSpacing(8)
-        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+        layout.setContentsMargins(6, 6, 6, 6)
 
-        self.chk_excel_json = QCheckBox("Форматировать JSON в ячейках")
+        opts = QHBoxLayout()
+        self.chk_excel_json = QCheckBox("JSON в ячейках")
         self.chk_excel_json.setChecked(
             self.config.get("json", {}).get("format_on_csv_export", True)
         )
-        self.chk_excel_json.setToolTip(
-            "JSON в CSV будет развёрнут в читаемый вид в Excel"
-        )
-        self.chk_excel_mask = QCheckBox("Сначала обезличить CSV")
+        self.chk_excel_mask = QCheckBox("Сначала обезличить")
         self.chk_excel_mask.setToolTip(
-            "Поиск и маскирование перед конвертацией; "
-            "если есть результаты на вкладке «Обезличивание» — только отмеченные"
+            "Маскирование перед Excel; иначе — только отмеченные с вкладки «Обезличивание»"
         )
-        layout.addWidget(self.chk_excel_json)
-        layout.addWidget(self.chk_excel_mask)
+        opts.addWidget(self.chk_excel_json)
+        opts.addWidget(self.chk_excel_mask)
+        opts.addStretch()
+        layout.addLayout(opts)
 
-        self.csv_info_label = QLabel("CSV: 0")
+        self.csv_info_label = QLabel("CSV в списке: 0")
         layout.addWidget(self.csv_info_label)
         layout.addStretch()
 
         self.btn_excel = QPushButton("Создать Excel")
-        self.btn_excel.setToolTip("Конвертировать все .csv из списка файлов")
         self.btn_excel.clicked.connect(self._on_create_excel)
         layout.addWidget(self.btn_excel)
         return tab
@@ -287,7 +275,7 @@ class MainWindow(QMainWindow):
 
     def _filter_type_key(self) -> str | None:
         text = self.filter_combo.currentText()
-        if text == "Все типы":
+        if text == "Все":
             return None
         return text
 
@@ -310,7 +298,7 @@ class MainWindow(QMainWindow):
         return [f for f in self.files if Path(f).suffix.lower() == ".csv"]
 
     def _update_csv_label(self) -> None:
-        self.csv_info_label.setText(f"CSV: {len(self._csv_files())}")
+        self.csv_info_label.setText(f"CSV в списке: {len(self._csv_files())}")
 
     def dragEnterEvent(self, event) -> None:  # noqa: N802
         if event.mimeData().hasUrls():
@@ -328,11 +316,9 @@ class MainWindow(QMainWindow):
 
     def _add_files(self, paths: list[str]) -> None:
         self.files = list(dict.fromkeys(self.files + paths))
-        self.files_label.setText(
-            f"{len(self.files)} файл(ов): "
-            + ", ".join(Path(p).name for p in self.files[:5])
-            + (" …" if len(self.files) > 5 else "")
-        )
+        names = ", ".join(Path(p).name for p in self.files[:4])
+        extra = f" +{len(self.files) - 4}" if len(self.files) > 4 else ""
+        self.files_label.setText(f"{len(self.files)}: {names}{extra}")
         self._update_csv_label()
 
     def _browse_files(self) -> None:
@@ -359,6 +345,7 @@ class MainWindow(QMainWindow):
         if path:
             self.output_dir = path
             self.out_label.setText(path)
+            self.out_label.setToolTip(path)
 
     def _open_output_dir(self) -> None:
         path = Path(self.output_dir)
@@ -373,34 +360,33 @@ class MainWindow(QMainWindow):
     def _append_log(self, message: str) -> None:
         self.log_view.append(message)
 
-    def _format_lines_progress(self, percent: int, done: int, total: int) -> None:
+    def _format_status_progress(self, percent: int, message: str) -> None:
         self.progress.setValue(percent)
-        self.progress_label.setText(f"{percent}%  ·  {done:,} / {total:,} строк")
+        self.progress_label.setText(f"{percent}% · {message}")
 
     def _update_findings_label(self) -> None:
         n = len(self.findings)
         sel = sum(1 for f in self.findings if f.selected)
         shown = len(self._displayed_findings)
-        extra = f", в таблице {shown}" if shown < n else ""
-        self.findings_count_label.setText(f"всего {n}, отмечено {sel}{extra}")
+        extra = f" / {shown}" if shown < n else ""
+        self.findings_count_label.setText(f"{sel}/{n}{extra}")
         self.btn_save_masked.setEnabled(n > 0 and not self.stop_btn.isEnabled())
 
     def _set_busy(self, busy: bool) -> None:
         self.stop_btn.setEnabled(busy)
         self.btn_scan.setEnabled(not busy)
         self.btn_excel.setEnabled(not busy)
+        self.btn_save_masked.setEnabled(not busy and len(self.findings) > 0)
         self.tabs.setEnabled(not busy)
         self.chk_pan.setEnabled(not busy)
         self.chk_ip.setEnabled(not busy)
         self.chk_pwd.setEnabled(not busy)
-        if busy:
-            self.btn_save_masked.setEnabled(False)
-        else:
+        if not busy:
             self._update_findings_label()
 
     def _connect_worker(self, worker: Worker) -> None:
         worker.progress.connect(self.progress.setValue)
-        worker.progress_lines.connect(self._format_lines_progress)
+        worker.progress_status.connect(self._format_status_progress)
         worker.log.connect(self._append_log)
         worker.error.connect(self._on_worker_error)
         worker.cancelled.connect(self._on_worker_cancelled)
@@ -409,7 +395,7 @@ class MainWindow(QMainWindow):
 
     def _start_worker(self, **kwargs: Any) -> None:
         self.progress.setValue(0)
-        self.progress_label.setText("0%  ·  подсчёт…")
+        self.progress_label.setText("0% · …")
         self._set_busy(True)
         self.worker = Worker(
             files=kwargs.get("files") or self.files,
@@ -435,11 +421,11 @@ class MainWindow(QMainWindow):
 
     def _on_save_masked(self) -> None:
         if not self.findings:
-            QMessageBox.warning(self, "RegCon", "Сначала нажмите «① Найти».")
+            QMessageBox.warning(self, "RegCon", "Сначала «Найти».")
             return
         self._sync_table_to_findings()
         if not any(f.selected for f in self.findings):
-            QMessageBox.warning(self, "RegCon", "Отметьте совпадения в таблице.")
+            QMessageBox.warning(self, "RegCon", "Отметьте совпадения.")
             return
         self._sync_config_flags()
         self._start_worker(
@@ -450,7 +436,7 @@ class MainWindow(QMainWindow):
     def _on_create_excel(self) -> None:
         csv_list = self._csv_files()
         if not csv_list:
-            QMessageBox.warning(self, "RegCon", "Нужен хотя бы один .csv файл.")
+            QMessageBox.warning(self, "RegCon", "Нужен хотя бы один .csv.")
             return
         self._sync_config_flags()
         mask_before = self.chk_excel_mask.isChecked()
@@ -478,8 +464,8 @@ class MainWindow(QMainWindow):
         all_filtered = self._filtered_sorted_findings()
         if len(all_filtered) > self._table_limit:
             self._append_log(
-                f"Показаны {self._table_limit} из {len(all_filtered)} "
-                f"(фильтр: {self.filter_combo.currentText()})."
+                f"Таблица: {self._table_limit} из {len(all_filtered)} "
+                f"({self.filter_combo.currentText()})."
             )
         self._displayed_findings = all_filtered[: self._table_limit]
         self.table.setUpdatesEnabled(False)
@@ -494,7 +480,7 @@ class MainWindow(QMainWindow):
             self.table.setItem(row, 2, QTableWidgetItem(Path(finding.file_path).name))
             loc = str(finding.line_no)
             if finding.cell:
-                loc = f"{finding.line_no} · {finding.cell}"
+                loc = f"{finding.line_no}:{finding.cell}"
             self.table.setItem(row, 3, QTableWidgetItem(loc))
             before = finding.context_before.replace("\n", " ").replace("\r", "")
             after = finding.context_after.replace("\n", " ").replace("\r", "")
@@ -546,7 +532,9 @@ class MainWindow(QMainWindow):
 
     def _on_worker_finished(self) -> None:
         self._set_busy(False)
-        self.progress_label.setText("100%  ·  готово")
+        if self.progress.value() < 100:
+            self.progress.setValue(100)
+        self.progress_label.setText("готово")
 
 
 def run_app() -> None:

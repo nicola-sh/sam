@@ -2,7 +2,7 @@ APP_STYLESHEET = """
 QMainWindow, QWidget {
     background: #f0f2f5;
     font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-    font-size: 13px;
+    font-size: 12px;
     color: #1e293b;
 }
 QGroupBox {
@@ -42,7 +42,7 @@ QPushButton {
     color: #ffffff;
     border: none;
     border-radius: 5px;
-    padding: 7px 16px;
+    padding: 5px 12px;
     font-weight: 500;
 }
 QPushButton:hover { background: #1d4ed8; }
@@ -101,6 +101,7 @@ QTextEdit#logView {
 QLabel#progressLabel {
     font-weight: 600;
     color: #2563eb;
-    min-width: 200px;
+    min-width: 140px;
+    font-size: 11px;
 }
 """

@@ -22,6 +22,7 @@ class Finding:
     context_after: str = ""
     selected: bool = True
     cell: str = ""
+    span_end: int = 0
 
     @classmethod
     def create(
@@ -43,6 +44,7 @@ class Finding:
             before, after = split_context(line, match_start, match_end, context_radius)
             if not context:
                 context = f"...{before}>>{matched_text}<<{after}..."
+        span_end = match_end if match_end is not None else column + len(matched_text)
         return cls(
             id=str(uuid.uuid4()),
             file_path=file_path,
@@ -54,6 +56,7 @@ class Finding:
             context_before=before,
             context_after=after,
             cell=cell,
+            span_end=span_end,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -69,6 +72,7 @@ class Finding:
             "context_after": self.context_after,
             "selected": self.selected,
             "cell": self.cell,
+            "span_end": self.span_end,
         }
 
     @classmethod
@@ -85,4 +89,5 @@ class Finding:
             context_after=data.get("context_after", ""),
             selected=bool(data.get("selected", True)),
             cell=data.get("cell", ""),
+            span_end=int(data.get("span_end", 0)),
         )

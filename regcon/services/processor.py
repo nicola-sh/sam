@@ -11,7 +11,7 @@ from regcon.maskers.masker import apply_replacements, findings_to_replacements
 from regcon.models import Finding
 from regcon.services.scanner import FileScanner
 from regcon.util.cancel import CancelCallback, check_cancelled
-from regcon.util.line_progress import LineProgressTracker
+from regcon.util.job_progress import JobProgress
 
 try:
     import openpyxl
@@ -41,7 +41,7 @@ class FileProcessor(FileScanner):
         output_dir: Path,
         on_line: Callable[[int], None] | None = None,
         cancel: CancelCallback = None,
-        progress: LineProgressTracker | None = None,
+        progress: JobProgress | None = None,
     ) -> Path:
         target = self.output_path(path, output_dir)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -50,10 +50,8 @@ class FileProcessor(FileScanner):
             "w", encoding=self.encoding, newline=""
         ) as dst:
             for line_no, line in enumerate(src, start=1):
-                check_cancelled(cancel)
-                if progress is not None:
-                    progress.tick(1)
-                elif on_line and (line_no == 1 or line_no % every == 0):
+                self._tick(line, cancel, progress)
+                if on_line and (line_no == 1 or line_no % every == 0):
                     on_line(line_no)
                 raw = line.rstrip("\n\r")
                 newline = line[len(raw) :]
@@ -193,7 +191,7 @@ class FileProcessor(FileScanner):
         output_dir: Path,
         on_line: Callable[[int], None] | None = None,
         cancel: CancelCallback = None,
-        progress: LineProgressTracker | None = None,
+        progress: JobProgress | None = None,
     ) -> Path:
         selected = [f for f in findings if f.selected]
         by_line: dict[int, list[Finding]] = defaultdict(list)
@@ -219,7 +217,7 @@ class FileProcessor(FileScanner):
         indent: int = 2,
         on_line: Callable[[int], None] | None = None,
         cancel: CancelCallback = None,
-        progress: LineProgressTracker | None = None,
+        progress: JobProgress | None = None,
     ) -> Path:
         target = output_dir / f"{path.stem}_jsonfmt{path.suffix}"
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -228,10 +226,8 @@ class FileProcessor(FileScanner):
             "w", encoding=self.encoding, newline=""
         ) as dst:
             for line_no, line in enumerate(src, start=1):
-                check_cancelled(cancel)
-                if progress is not None:
-                    progress.tick(1)
-                elif on_line and (line_no == 1 or line_no % every == 0):
+                self._tick(line, cancel, progress)
+                if on_line and (line_no == 1 or line_no % every == 0):
                     on_line(line_no)
                 raw = line.rstrip("\n\r")
                 newline = line[len(raw) :]
