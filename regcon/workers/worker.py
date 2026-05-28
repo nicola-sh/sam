@@ -95,8 +95,12 @@ class Worker(QThread):
             if self._cancel_check():
                 raise CancelledError()
             progress.start_file(idx, path.name)
+            profile = scanner._pan.active_profile
             self.log.emit(f"Скан: {path.name}")
             found = scanner.scan_file(path, cancel=self._cancel_check, progress=progress)
+            profile = scanner._pan.active_profile
+            if profile != "normal":
+                self.log.emit(f"  PAN: профиль {profile}")
             all_findings.extend(found)
             self.log.emit(f"  +{len(found)}")
         write_audit(

@@ -5,6 +5,7 @@ regcon:
   audit_log: regcon_actions.log
   progress_every_lines: 5000
   progress_heartbeat_sec: 5
+  progress_batch_bytes: 65536
   max_table_rows: 5000
   context_radius: 30
 
