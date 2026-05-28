@@ -8,10 +8,6 @@ from regcon.models import Finding
 PAN_GROUPED_RE = re.compile(
     r"\b(?:\d{4}[ -]){2,4}\d{1,4}\b|\b\d{13,19}\b"
 )
-# Цифры среди букв/символов: card=4111x1111…, маскированные поля в логах
-MIXED_ALNUM_RE = re.compile(
-    r"(?<![0-9/])([0-9A-Za-z][0-9A-Za-z\s\-_]{11,55}[0-9A-Za-z])(?![0-9])"
-)
 DATE_IN_LINE_RE = re.compile(
     r"\d{4}[-/.]\d{1,2}[-/.]\d{1,2}"
     r"|\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}"
@@ -37,12 +33,6 @@ def luhn_valid(number: str) -> bool:
 
 def _digits_only(text: str) -> str:
     return "".join(ch for ch in text if ch.isdigit())
-
-
-def _digit_ratio(text: str) -> float:
-    if not text:
-        return 0.0
-    return sum(ch.isdigit() for ch in text) / len(text)
 
 
 def _valid_calendar(y: int, m: int, d: int) -> bool:
@@ -89,7 +79,8 @@ def _all_same_digit(digits: str) -> bool:
     return len(digits) > 0 and len(set(digits)) == 1
 
 
-def _allowed_chars_only(text: str) -> bool:
+def _allowed_pan_chars_only(text: str) -> bool:
+    """В совпадении PAN — только цифры, пробел и дефис."""
     return all(ch.isdigit() or ch in " -" for ch in text)
 
 
@@ -115,25 +106,12 @@ def _time_suffix_false_positive(line: str, start: int, digits: str) -> bool:
 
 
 def is_plausible_pan(
-    matched_text: str,
     digits: str,
     line: str,
     start: int,
     end: int,
-    *,
-    mixed_alnum: bool = False,
 ) -> bool:
     if len(digits) < 13 or len(digits) > 19:
-        return False
-    if mixed_alnum:
-        if _digit_ratio(matched_text) < 0.62:
-            return False
-        letters = sum(ch.isalpha() for ch in matched_text)
-        if letters > 8:
-            return False
-    elif not _allowed_chars_only(matched_text):
-        return False
-    if _has_date_separators(matched_text):
         return False
     if _all_same_digit(digits):
         return False
@@ -148,52 +126,78 @@ def is_plausible_pan(
     return True
 
 
+def _format_pan_display(digits: str) -> str:
+    """Только цифры, без букв (группы по 4 для читаемости)."""
+    if len(digits) == 16:
+        return f"{digits[0:4]} {digits[4:8]} {digits[8:12]} {digits[12:16]}"
+    return digits
+
+
+def _iter_pan_from_digit_runs(line: str) -> Iterator[tuple[int, int, str]]:
+    """
+    Ищет PAN по цифрам в строке (буквы между цифрами игнорируются).
+    В совпадении — только цифры.
+    """
+    indices = [i for i, ch in enumerate(line) if ch.isdigit()]
+    if len(indices) < 13:
+        return
+    digits_joined = "".join(line[i] for i in indices)
+    seen_digits: set[str] = set()
+    for length in range(19, 12, -1):
+        if length > len(digits_joined):
+            continue
+        for offset in range(len(digits_joined) - length + 1):
+            chunk = digits_joined[offset : offset + length]
+            if chunk in seen_digits:
+                continue
+            if not luhn_valid(chunk):
+                continue
+            pos_start = indices[offset]
+            pos_end = indices[offset + length - 1] + 1
+            if not is_plausible_pan(chunk, line, pos_start, pos_end):
+                continue
+            seen_digits.add(chunk)
+            yield pos_start, pos_end, chunk
+
+
+def _iter_pan_from_line_spans(line: str) -> Iterator[tuple[int, int, str]]:
+    """Фрагменты строки, где только цифры/пробел/дефис."""
+    i = 0
+    n = len(line)
+    while i < n:
+        if not line[i].isdigit():
+            i += 1
+            continue
+        j = i
+        digit_count = 0
+        while j < n:
+            ch = line[j]
+            if ch.isdigit():
+                digit_count += 1
+                j += 1
+            elif ch in " -" and digit_count > 0:
+                j += 1
+            else:
+                break
+        if 13 <= digit_count <= 19:
+            span = line[i:j]
+            if _allowed_pan_chars_only(span):
+                digits = _digits_only(span)
+                if luhn_valid(digits) and is_plausible_pan(digits, line, i, j):
+                    yield i, j, digits
+        i = max(i + 1, j)
+
+
 class PanDetector:
     def __init__(self, config: dict) -> None:
         pan_cfg = config.get("pan", {})
         self.enabled = pan_cfg.get("enabled", True)
         self.use_luhn = pan_cfg.get("use_luhn", True)
         self.context_radius = int(pan_cfg.get("context_radius", 30))
-        self.scan_mixed = pan_cfg.get("scan_mixed_alnum", True)
-        patterns = [re.compile(p) for p in pan_cfg.get("regex_list", [])]
+        self._patterns = [re.compile(p) for p in pan_cfg.get("regex_list", [])]
         if pan_cfg.get("use_grouped_scan", True):
-            patterns.append(PAN_GROUPED_RE)
-        self._patterns = patterns
-
-    def _yield_match(
-        self,
-        line: str,
-        file_path: str,
-        line_no: int,
-        text: str,
-        start: int,
-        end: int,
-        seen: set[tuple[int, int]],
-        *,
-        mixed: bool = False,
-    ) -> Iterator[Finding]:
-        span = (start, end)
-        if span in seen:
-            return
-        digits = _digits_only(text)
-        if not is_plausible_pan(
-            text, digits, line, start, end, mixed_alnum=mixed
-        ):
-            return
-        if self.use_luhn and not luhn_valid(digits):
-            return
-        seen.add(span)
-        yield Finding.create(
-            file_path=file_path,
-            line_no=line_no,
-            column=start,
-            match_type="PAN",
-            matched_text=text,
-            line=line,
-            match_start=start,
-            match_end=end,
-            context_radius=self.context_radius,
-        )
+            self._patterns.append(PAN_GROUPED_RE)
+        self._scan_embedded = pan_cfg.get("scan_embedded_digits", True)
 
     def scan_line(
         self,
@@ -208,26 +212,40 @@ class PanDetector:
         if sum(ch.isdigit() for ch in line) < 13:
             return
         seen: set[tuple[int, int]] = set()
+
+        def emit(start: int, end: int, digits: str) -> Iterator[Finding]:
+            span = (start, end)
+            if span in seen:
+                return
+            if self.use_luhn and not luhn_valid(digits):
+                return
+            seen.add(span)
+            display = _format_pan_display(digits)
+            yield Finding.create(
+                file_path=file_path,
+                line_no=line_no,
+                column=start,
+                match_type="PAN",
+                matched_text=display,
+                line=line,
+                match_start=start,
+                match_end=end,
+                context_radius=self.context_radius,
+            )
+
         for pattern in self._patterns:
             for match in pattern.finditer(line):
-                yield from self._yield_match(
-                    line,
-                    file_path,
-                    line_no,
-                    match.group(0),
-                    match.start(),
-                    match.end(),
-                    seen,
-                )
-        if self.scan_mixed:
-            for match in MIXED_ALNUM_RE.finditer(line):
-                yield from self._yield_match(
-                    line,
-                    file_path,
-                    line_no,
-                    match.group(1),
-                    match.start(1),
-                    match.end(1),
-                    seen,
-                    mixed=True,
-                )
+                text = match.group(0)
+                if not _allowed_pan_chars_only(text):
+                    continue
+                digits = _digits_only(text)
+                if len(digits) < 13:
+                    continue
+                yield from emit(match.start(), match.end(), digits)
+
+        for start, end, digits in _iter_pan_from_line_spans(line):
+            yield from emit(start, end, digits)
+
+        if self._scan_embedded:
+            for start, end, digits in _iter_pan_from_digit_runs(line):
+                yield from emit(start, end, digits)

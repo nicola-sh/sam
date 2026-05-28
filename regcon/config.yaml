@@ -6,6 +6,7 @@ regcon:
   fallback_encoding: cp1251
   audit_log: regcon_actions.log
   progress_every_lines: 5000
+  progress_heartbeat_sec: 5
   max_table_rows: 5000
   context_radius: 30
 
@@ -15,7 +16,7 @@ pan:
   mask_keep_first: 6
   mask_keep_last: 4
   use_grouped_scan: true
-  scan_mixed_alnum: true
+  scan_embedded_digits: true
   context_radius: 30
   regex_list:
     - '9112\s?39[0-9]{2}\s?[0-9]{4}\s?[0-9]{4}'

@@ -8,7 +8,7 @@ from regcon.detectors import IpDetector, PanDetector, SecretDetector
 from regcon.models import Finding
 from regcon.services.scan_line import scan_line_with_detectors
 from regcon.util.cancel import CancelCallback, check_cancelled
-from regcon.util.line_progress import LineProgressTracker
+from regcon.util.job_progress import JobProgress
 
 try:
     import openpyxl
@@ -30,8 +30,6 @@ class FileScanner:
         rc = config.get("regcon", {})
         self.encoding = rc.get("encoding", "utf-8")
         self.fallback_encoding = rc.get("fallback_encoding", "cp1251")
-        self._progress_every = int(rc.get("progress_every_lines", 5000))
-
     def _scan_cell(
         self,
         cell_text: str,
@@ -50,16 +48,14 @@ class FileScanner:
 
     def _tick(
         self,
-        line_no: int,
-        on_line: Callable[[int], None] | None,
+        line: str,
         cancel: CancelCallback,
-        progress: LineProgressTracker | None = None,
+        progress: JobProgress | None = None,
     ) -> None:
         check_cancelled(cancel)
         if progress is not None:
-            progress.tick(1)
-        elif on_line and (line_no == 1 or line_no % self._progress_every == 0):
-            on_line(line_no)
+            progress.add_bytes(len(line.encode("utf-8", errors="replace")))
+            progress.tick_line()
 
     def _open_text(self, path: Path):
         try:
@@ -72,13 +68,13 @@ class FileScanner:
         path: Path,
         on_line: Callable[[int], None] | None = None,
         cancel: CancelCallback = None,
-        progress: LineProgressTracker | None = None,
+        progress: JobProgress | None = None,
     ) -> list[Finding]:
         findings: list[Finding] = []
         file_path = str(path)
         with self._open_text(path) as handle:
             for line_no, line in enumerate(handle, start=1):
-                self._tick(line_no, on_line, cancel, progress)
+                self._tick(line, cancel, progress)
                 stripped = line.rstrip("\n\r")
                 findings.extend(
                     scan_line_with_detectors(
@@ -97,7 +93,7 @@ class FileScanner:
         path: Path,
         on_line: Callable[[int], None] | None = None,
         cancel: CancelCallback = None,
-        progress: LineProgressTracker | None = None,
+        progress: JobProgress | None = None,
     ) -> list[Finding]:
         if pd is not None:
             return self._scan_csv_pandas(path, on_line, cancel, progress)
@@ -108,14 +104,15 @@ class FileScanner:
         path: Path,
         on_line: Callable[[int], None] | None = None,
         cancel: CancelCallback = None,
-        progress: LineProgressTracker | None = None,
+        progress: JobProgress | None = None,
     ) -> list[Finding]:
         findings: list[Finding] = []
         file_path = str(path)
         with self._open_text(path) as handle:
             reader = csv.reader(handle)
             for line_no, row in enumerate(reader, start=1):
-                self._tick(line_no, on_line, cancel, progress)
+                row_text = ",".join(row)
+                self._tick(row_text + "\n", cancel, progress)
                 for col_idx, cell in enumerate(row):
                     label = self._cell_name(col_idx, line_no)
                     self._scan_cell(
@@ -128,7 +125,7 @@ class FileScanner:
         path: Path,
         on_line: Callable[[int], None] | None = None,
         cancel: CancelCallback = None,
-        progress: LineProgressTracker | None = None,
+        progress: JobProgress | None = None,
     ) -> list[Finding]:
         findings: list[Finding] = []
         file_path = str(path)
@@ -154,7 +151,8 @@ class FileScanner:
             values = chunk.to_numpy(dtype=str)
             for row in values:
                 line_no += 1
-                self._tick(line_no, on_line, cancel, progress)
+                row_text = "\t".join(str(c) for c in row)
+                self._tick(row_text + "\n", cancel, progress)
                 for col_idx, cell_text in enumerate(row):
                     label = self._cell_name(col_idx, line_no)
                     self._scan_cell(
@@ -167,7 +165,7 @@ class FileScanner:
         path: Path,
         on_line: Callable[[int], None] | None = None,
         cancel: CancelCallback = None,
-        progress: LineProgressTracker | None = None,
+        progress: JobProgress | None = None,
     ) -> list[Finding]:
         if openpyxl is None:
             raise RuntimeError("openpyxl не установлен — нужен для Excel")
@@ -179,7 +177,8 @@ class FileScanner:
             for sheet in workbook.worksheets:
                 for row in sheet.iter_rows(values_only=True):
                     line_no += 1
-                    self._tick(line_no, on_line, cancel, progress)
+                    row_text = "\t".join("" if v is None else str(v) for v in row)
+                    self._tick(row_text + "\n", cancel, progress)
                     for col_idx, value in enumerate(row):
                         if value is None:
                             continue
@@ -201,7 +200,7 @@ class FileScanner:
         path: Path,
         on_line: Callable[[int], None] | None = None,
         cancel: CancelCallback = None,
-        progress: LineProgressTracker | None = None,
+        progress: JobProgress | None = None,
     ) -> list[Finding]:
         suffix = path.suffix.lower()
         if suffix in {".txt", ".log", ".json"}:
@@ -219,13 +218,14 @@ class FileScanner:
         path: Path,
         on_line: Callable[[int], None] | None = None,
         cancel: CancelCallback = None,
-        progress: LineProgressTracker | None = None,
+        progress: JobProgress | None = None,
     ) -> list[Finding]:
         findings: list[Finding] = []
         file_path = str(path)
         frame = pd.read_excel(path, dtype=str, header=None)
         for line_no, row in enumerate(frame.itertuples(index=False), start=1):
-            self._tick(line_no, on_line, cancel, progress)
+            row_text = "\t".join(str(v) for v in row)
+            self._tick(row_text + "\n", cancel, progress)
             for col_idx, value in enumerate(row):
                 label = self._cell_name(col_idx, line_no)
                 self._scan_cell(
