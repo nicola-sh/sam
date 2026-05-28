@@ -24,9 +24,10 @@ class IpDetector:
     def _allowed(self, ip_text: str) -> bool:
         if ip_text in self.whitelist:
             return False
+        if ip_text.startswith("127.") or ip_text == "::1":
+            return False
         try:
-            ip = ipaddress.ip_address(ip_text)
-            if ip.is_loopback:
+            if ipaddress.ip_address(ip_text).is_loopback:
                 return False
         except ValueError:
             return False

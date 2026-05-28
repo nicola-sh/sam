@@ -73,6 +73,23 @@ def test_mask_pan_keeps_edges():
     assert masked.endswith("1111")
 
 
+def test_embedded_auto_skips_plain_digit_line_without_match():
+    """auto: без букв — нет тяжёлого перебора встроенных цифр."""
+    cfg = {
+        "pan": {
+            "enabled": True,
+            "use_luhn": True,
+            "use_grouped_scan": True,
+            "scan_embedded_digits": "auto",
+            "regex_list": [],
+        }
+    }
+    det = PanDetector(cfg)
+    line = "x" + "9" * 200 + "x"
+    hits = list(det.scan_line(line, "f.log", 1))
+    assert hits == []
+
+
 def test_apply_replacements():
     line = "card=4111111111111111 end"
     finding = Finding.create(
