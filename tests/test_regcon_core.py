@@ -1,4 +1,9 @@
-from regcon.detectors.pan import PanDetector, is_plausible_pan, luhn_valid
+from regcon.detectors.pan import (
+    PanDetector,
+    _digits_only,
+    is_plausible_pan,
+    luhn_valid,
+)
 from regcon.maskers.masker import apply_replacements, findings_to_replacements, mask_pan_text
 from regcon.models import Finding
 from regcon.util.context import split_context
@@ -35,14 +40,15 @@ def test_finds_pan_with_letters_around():
             "enabled": True,
             "use_luhn": True,
             "use_grouped_scan": True,
-            "scan_mixed_alnum": True,
+            "scan_embedded_digits": True,
             "regex_list": [],
         }
     }
     det = PanDetector(cfg)
-    line = "token=4111x111111111111x9999 field"
+    line = "token=4111A111111111111Z field"
     hits = list(det.scan_line(line, "f.log", 1))
-    assert any("4111" in h.matched_text for h in hits)
+    assert hits and len(_digits_only(hits[0].matched_text)) >= 13
+    assert all(ch.isdigit() or ch == " " for ch in hits[0].matched_text)
 
 
 def test_finds_grouped_pan():
@@ -51,7 +57,7 @@ def test_finds_grouped_pan():
             "enabled": True,
             "use_luhn": True,
             "use_grouped_scan": True,
-            "scan_mixed_alnum": False,
+            "scan_embedded_digits": False,
             "regex_list": [],
         }
     }
