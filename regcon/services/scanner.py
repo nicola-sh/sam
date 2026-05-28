@@ -99,11 +99,13 @@ class FileScanner:
                 if progress is not None:
                     progress._pulse(force=True)
 
+            workers_n = self._pan.parallel_workers()
             findings = scan_text_file_parallel(
                 path,
                 self.config,
                 file_path,
-                self._pan.parallel_workers(),
+                file_size,
+                workers_n,
                 self._pan.parallel_chunk_lines(),
                 cancel,
                 _on_chunk,

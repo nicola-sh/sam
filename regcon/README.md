@@ -174,9 +174,11 @@ pan:
   use_luhn: true
   mask_keep_first: 6
   mask_keep_last: 4
-  regex_list:
-    - '9112\s?39[0-9]{2}\s?[0-9]{4}\s?[0-9]{4}'
-    - '\b[0-9]{4}[\s-]?[0-9]{4}[\s-]?[0-9]{4}[\s-]?[0-9]{4}\b'
+  prefix_file: config/pan_prefixes.txt   # первые 8 цифр PAN, по строке
+  prefix_digits: 8
+  prefix_line_filter: true
+  parallel_workers: auto
+  parallel_min_file_mb: 20
 
 ip:
   enabled: true
@@ -191,6 +193,20 @@ excel:
   auto_filter: true
   freeze_header: true
 ```
+
+### Справочник PAN (`config/pan_prefixes.txt`)
+
+**Первые 8 цифр** номера — **одна запись на строку** (только цифры, `#` — комментарий).
+
+Алгоритм поиска:
+
+1. В строке лога ищем начало, совпадающее с одним из 8-значных префиксов.
+2. Собираем **13–19 цифр** подряд (пробелы/дефисы между цифрами допускаются).
+3. Проверяем **Luhn**; при успехе — совпадение в таблице.
+
+Строки без ни одного префикса из файла пропускаются (быстро на больших логах).
+
+Скопируйте `config/pan_prefixes.example.txt` → `config/pan_prefixes.txt` и вставьте полный список.
 
 ---
 

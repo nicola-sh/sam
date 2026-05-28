@@ -6,8 +6,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from regcon.config.pan_prefixes import resolve_prefix_path
 from regcon.config.settings import load_config
 from regcon.models import Finding
+from regcon.util.pan_prefix_index import build_prefix_index
 from regcon.ui.styles import APP_STYLESHEET
 from regcon.workers.worker import Worker
 
@@ -123,7 +125,16 @@ class MainWindow(QMainWindow):
         pwd_cfg = self.config.get("passwords", {})
         self.chk_pan = QCheckBox("PAN")
         self.chk_pan.setChecked(pan_cfg.get("enabled", True))
-        self.chk_pan.setToolTip("Карты (Luhn); в таблице только цифры")
+        prefix_path = resolve_prefix_path(self.config)
+        prefix_n = build_prefix_index(
+            prefix_path, ()
+        ).count
+        pan_tip = "PAN: первые 8 цифр из справочника → Luhn"
+        if prefix_n:
+            pan_tip += f" ({prefix_n} шт., {prefix_path.name})"
+        else:
+            pan_tip += " — заполните config/pan_prefixes.txt"
+        self.chk_pan.setToolTip(pan_tip)
         self.chk_ip = QCheckBox("IP")
         self.chk_ip.setChecked(ip_cfg.get("enabled", True))
         self.chk_pwd = QCheckBox("Пароли")
