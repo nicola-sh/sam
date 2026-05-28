@@ -177,8 +177,6 @@ pan:
   prefix_file: config/pan_prefixes.txt   # первые 8 цифр PAN, по строке
   prefix_digits: 8
   prefix_line_filter: true
-  parallel_workers: auto
-  parallel_min_file_mb: 20
 
 ip:
   enabled: true
@@ -206,7 +204,7 @@ excel:
 
 Строки без ни одного префикса из файла пропускаются (быстро на больших логах).
 
-Скопируйте `config/pan_prefixes.example.txt` → `config/pan_prefixes.txt` и вставьте полный список.
+Отредактируйте `config/pan_prefixes.txt` и вставьте полный список префиксов.
 
 ---
 

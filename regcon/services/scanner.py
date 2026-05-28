@@ -90,29 +90,6 @@ class FileScanner:
         progress: JobProgress | None = None,
     ) -> list[Finding]:
         file_path = str(path)
-        file_size = path.stat().st_size if path.exists() else 0
-        self._pan.begin_file(file_size)
-        if self._pan.wants_parallel_scan(file_size):
-            from regcon.services.pan_parallel import scan_text_file_parallel
-
-            def _on_chunk(_n: int) -> None:
-                if progress is not None:
-                    progress._pulse(force=True)
-
-            workers_n = self._pan.parallel_workers()
-            findings = scan_text_file_parallel(
-                path,
-                self.config,
-                file_path,
-                file_size,
-                workers_n,
-                self._pan.parallel_chunk_lines(),
-                cancel,
-                _on_chunk,
-            )
-            self._flush_progress(progress)
-            return findings
-
         findings: list[Finding] = []
         with self._open_text(path) as handle:
             for line_no, line in enumerate(handle, start=1):

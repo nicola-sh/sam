@@ -55,7 +55,6 @@ def test_prefix_filter_skips_unknown_bin():
         }
     }
     det = PanDetector(cfg)
-    det.begin_file(0)
     line = "card 4111 1111 1111 1111"
     assert list(det.scan_line(line, "f.log", 1)) == []
 
@@ -71,7 +70,6 @@ def test_detector_finds_configured_prefix():
         }
     }
     det = PanDetector(cfg)
-    det.begin_file(0)
     hits = list(det.scan_line("n 4111111111111111", "f.log", 1))
     assert len(hits) == 1
     assert "4111" in hits[0].matched_text

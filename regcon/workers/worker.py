@@ -97,13 +97,8 @@ class Worker(QThread):
             progress.start_file(idx, path.name)
             self.log.emit(f"Скан: {path.name}")
             found = scanner.scan_file(path, cancel=self._cancel_check, progress=progress)
-            pan = scanner._pan
-            if pan.active_profile != "normal":
-                self.log.emit(f"  PAN: профиль {pan.active_profile}")
-            if pan.wants_parallel_scan(path.stat().st_size):
-                self.log.emit(f"  PAN: потоков {pan.parallel_workers()}")
-            if pan.prefix_count:
-                self.log.emit(f"  PAN: префиксов {pan.prefix_count}")
+            if scanner._pan.prefix_count:
+                self.log.emit(f"  PAN: префиксов {scanner._pan.prefix_count}")
             all_findings.extend(found)
             self.log.emit(f"  +{len(found)}")
         write_audit(
