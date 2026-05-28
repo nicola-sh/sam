@@ -31,6 +31,7 @@ class Worker(QThread):
         config: dict[str, Any],
         output_dir: str,
         findings: list[dict[str, Any]] | None = None,
+        job_options: dict[str, Any] | None = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -39,6 +40,7 @@ class Worker(QThread):
         self.config = config
         self.output_dir = Path(output_dir)
         self.findings = [Finding.from_dict(item) for item in (findings or [])]
+        self.job_options = job_options or {}
 
     def _cancel_check(self) -> bool:
         return self.isInterruptionRequested()
@@ -159,30 +161,75 @@ class Worker(QThread):
         self.progress.emit(100)
 
     def _run_csv2xlsx(self) -> None:
-        total = len(self.files)
-        for idx, path in enumerate(self.files, start=1):
+        mask_first = bool(self.job_options.get("mask_before", False))
+        format_json = bool(self.job_options.get("format_json_cells", False))
+        use_existing_findings = bool(self.job_options.get("use_existing_findings", False))
+
+        csv_files = [p for p in self.files if p.suffix.lower() == ".csv"]
+        if not csv_files:
+            raise ValueError("Нет CSV-файлов для конвертации.")
+
+        scanner = FileScanner(self.config)
+        processor = FileProcessor(self.config)
+        total = len(csv_files)
+
+        for idx, path in enumerate(csv_files, start=1):
             if self._cancel_check():
                 raise CancelledError()
-            if path.suffix.lower() != ".csv":
-                self.log.emit(f"Пропуск (не CSV): {path.name}")
-                continue
-            self.log.emit(f"Конвертация: {path.name}")
+            self.log.emit(f"CSV → Excel: {path.name}")
+            source = path
+
+            if mask_first:
+                if use_existing_findings and self.findings:
+                    file_findings = [
+                        f
+                        for f in self.findings
+                        if f.selected and f.file_path == str(path)
+                    ]
+                else:
+                    self.log.emit("  поиск чувствительных данных…")
+                    file_findings = scanner.scan_file(
+                        path, cancel=self._cancel_check
+                    )
+                    for item in file_findings:
+                        item.selected = True
+                if file_findings:
+                    self.log.emit(f"  обезличивание: {len(file_findings)} замен")
+                    source = processor.mask_file(
+                        path,
+                        file_findings,
+                        self.output_dir,
+                        cancel=self._cancel_check,
+                    )
+                else:
+                    self.log.emit("  чувствительные данные не найдены")
+
+            if format_json:
+                self.log.emit("  форматирование JSON в ячейках")
+
             target = csv_to_excel(
-                path,
+                source,
                 self.output_dir,
                 self.config,
-                on_progress=lambda pct: self.progress.emit(
-                    int((idx - 1) / total * 100 + pct / total)
+                on_progress=lambda pct, i=idx, t=total: self.progress.emit(
+                    int((i - 1) / t * 100 + pct / t)
                 ),
                 cancel=self._cancel_check,
+                format_json_cells=format_json,
+                output_name=f"{path.stem}.xlsx",
             )
-            self.log.emit(f"  Excel: {target.name}")
+            self.log.emit(f"  готово: {target.name}")
             self._emit_progress(idx, total)
+
         write_audit(
             self.output_dir,
             self.config,
             "csv2xlsx",
-            {"files": [str(p) for p in self.files]},
+            {
+                "files": [str(p) for p in csv_files],
+                "mask_before": mask_first,
+                "format_json_cells": format_json,
+            },
         )
         self.progress.emit(100)
 

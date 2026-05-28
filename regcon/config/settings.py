@@ -44,6 +44,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "json": {
         "enabled": True,
         "indent": 2,
+        "format_on_csv_export": True,
     },
 }
 
