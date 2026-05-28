@@ -8,6 +8,7 @@ from regcon.detectors import IpDetector, PanDetector, SecretDetector
 from regcon.models import Finding
 from regcon.services.scan_line import scan_line_with_detectors
 from regcon.util.cancel import CancelCallback, check_cancelled
+from regcon.util.line_progress import LineProgressTracker
 
 try:
     import openpyxl
@@ -52,10 +53,13 @@ class FileScanner:
         line_no: int,
         on_line: Callable[[int], None] | None,
         cancel: CancelCallback,
+        progress: LineProgressTracker | None = None,
     ) -> None:
-        if on_line and (line_no == 1 or line_no % self._progress_every == 0):
-            on_line(line_no)
         check_cancelled(cancel)
+        if progress is not None:
+            progress.tick(1)
+        elif on_line and (line_no == 1 or line_no % self._progress_every == 0):
+            on_line(line_no)
 
     def _open_text(self, path: Path):
         try:
@@ -68,12 +72,13 @@ class FileScanner:
         path: Path,
         on_line: Callable[[int], None] | None = None,
         cancel: CancelCallback = None,
+        progress: LineProgressTracker | None = None,
     ) -> list[Finding]:
         findings: list[Finding] = []
         file_path = str(path)
         with self._open_text(path) as handle:
             for line_no, line in enumerate(handle, start=1):
-                self._tick(line_no, on_line, cancel)
+                self._tick(line_no, on_line, cancel, progress)
                 stripped = line.rstrip("\n\r")
                 findings.extend(
                     scan_line_with_detectors(
@@ -92,23 +97,25 @@ class FileScanner:
         path: Path,
         on_line: Callable[[int], None] | None = None,
         cancel: CancelCallback = None,
+        progress: LineProgressTracker | None = None,
     ) -> list[Finding]:
         if pd is not None:
-            return self._scan_csv_pandas(path, on_line, cancel)
-        return self._scan_csv_stdlib(path, on_line, cancel)
+            return self._scan_csv_pandas(path, on_line, cancel, progress)
+        return self._scan_csv_stdlib(path, on_line, cancel, progress)
 
     def _scan_csv_stdlib(
         self,
         path: Path,
         on_line: Callable[[int], None] | None = None,
         cancel: CancelCallback = None,
+        progress: LineProgressTracker | None = None,
     ) -> list[Finding]:
         findings: list[Finding] = []
         file_path = str(path)
         with self._open_text(path) as handle:
             reader = csv.reader(handle)
             for line_no, row in enumerate(reader, start=1):
-                self._tick(line_no, on_line, cancel)
+                self._tick(line_no, on_line, cancel, progress)
                 for col_idx, cell in enumerate(row):
                     label = self._cell_name(col_idx, line_no)
                     self._scan_cell(
@@ -121,6 +128,7 @@ class FileScanner:
         path: Path,
         on_line: Callable[[int], None] | None = None,
         cancel: CancelCallback = None,
+        progress: LineProgressTracker | None = None,
     ) -> list[Finding]:
         findings: list[Finding] = []
         file_path = str(path)
@@ -146,7 +154,7 @@ class FileScanner:
             values = chunk.to_numpy(dtype=str)
             for row in values:
                 line_no += 1
-                self._tick(line_no, on_line, cancel)
+                self._tick(line_no, on_line, cancel, progress)
                 for col_idx, cell_text in enumerate(row):
                     label = self._cell_name(col_idx, line_no)
                     self._scan_cell(
@@ -159,6 +167,7 @@ class FileScanner:
         path: Path,
         on_line: Callable[[int], None] | None = None,
         cancel: CancelCallback = None,
+        progress: LineProgressTracker | None = None,
     ) -> list[Finding]:
         if openpyxl is None:
             raise RuntimeError("openpyxl не установлен — нужен для Excel")
@@ -170,7 +179,7 @@ class FileScanner:
             for sheet in workbook.worksheets:
                 for row in sheet.iter_rows(values_only=True):
                     line_no += 1
-                    self._tick(line_no, on_line, cancel)
+                    self._tick(line_no, on_line, cancel, progress)
                     for col_idx, value in enumerate(row):
                         if value is None:
                             continue
@@ -192,29 +201,31 @@ class FileScanner:
         path: Path,
         on_line: Callable[[int], None] | None = None,
         cancel: CancelCallback = None,
+        progress: LineProgressTracker | None = None,
     ) -> list[Finding]:
         suffix = path.suffix.lower()
         if suffix in {".txt", ".log", ".json"}:
-            return self.scan_text_file(path, on_line, cancel)
+            return self.scan_text_file(path, on_line, cancel, progress)
         if suffix == ".csv":
-            return self.scan_csv_file(path, on_line, cancel)
+            return self.scan_csv_file(path, on_line, cancel, progress)
         if suffix in {".xlsx", ".xlsm"}:
-            return self.scan_excel_file(path, on_line, cancel)
+            return self.scan_excel_file(path, on_line, cancel, progress)
         if suffix == ".xls" and pd is not None:
-            return self._scan_legacy_xls(path, on_line, cancel)
-        return self.scan_text_file(path, on_line, cancel)
+            return self._scan_legacy_xls(path, on_line, cancel, progress)
+        return self.scan_text_file(path, on_line, cancel, progress)
 
     def _scan_legacy_xls(
         self,
         path: Path,
         on_line: Callable[[int], None] | None = None,
         cancel: CancelCallback = None,
+        progress: LineProgressTracker | None = None,
     ) -> list[Finding]:
         findings: list[Finding] = []
         file_path = str(path)
         frame = pd.read_excel(path, dtype=str, header=None)
         for line_no, row in enumerate(frame.itertuples(index=False), start=1):
-            self._tick(line_no, on_line, cancel)
+            self._tick(line_no, on_line, cancel, progress)
             for col_idx, value in enumerate(row):
                 label = self._cell_name(col_idx, line_no)
                 self._scan_cell(

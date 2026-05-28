@@ -5,9 +5,12 @@ from typing import Iterator
 
 from regcon.models import Finding
 
-# PAN: группы по 4 цифры через пробел/дефис ИЛИ сплошной блок 13–19 цифр (без / и .)
 PAN_GROUPED_RE = re.compile(
     r"\b(?:\d{4}[ -]){2,4}\d{1,4}\b|\b\d{13,19}\b"
+)
+# Цифры среди букв/символов: card=4111x1111…, маскированные поля в логах
+MIXED_ALNUM_RE = re.compile(
+    r"(?<![0-9/])([0-9A-Za-z][0-9A-Za-z\s\-_]{11,55}[0-9A-Za-z])(?![0-9])"
 )
 DATE_IN_LINE_RE = re.compile(
     r"\d{4}[-/.]\d{1,2}[-/.]\d{1,2}"
@@ -36,6 +39,12 @@ def _digits_only(text: str) -> str:
     return "".join(ch for ch in text if ch.isdigit())
 
 
+def _digit_ratio(text: str) -> float:
+    if not text:
+        return 0.0
+    return sum(ch.isdigit() for ch in text) / len(text)
+
+
 def _valid_calendar(y: int, m: int, d: int) -> bool:
     if not (1900 <= y <= 2100 and 1 <= m <= 12 and 1 <= d <= 31):
         return False
@@ -47,7 +56,6 @@ def _valid_calendar(y: int, m: int, d: int) -> bool:
 
 
 def _looks_like_date_digits(digits: str) -> bool:
-    """Цифровая последовательность похожа на дату, а не на PAN."""
     n = len(digits)
     if n == 8:
         y, m, d = int(digits[0:4]), int(digits[4:6]), int(digits[6:8])
@@ -56,11 +64,7 @@ def _looks_like_date_digits(digits: str) -> bool:
         d, m, y = int(digits[0:2]), int(digits[2:4]), int(digits[4:8])
         if _valid_calendar(y, m, d):
             return True
-    if n == 14:
-        y, m, d = int(digits[0:4]), int(digits[4:6]), int(digits[6:8])
-        if _valid_calendar(y, m, d):
-            return True
-    if n == 16:
+    if n in {14, 16}:
         y, m, d = int(digits[0:4]), int(digits[4:6]), int(digits[6:8])
         if _valid_calendar(y, m, d):
             return True
@@ -68,18 +72,13 @@ def _looks_like_date_digits(digits: str) -> bool:
 
 
 def _is_year_prefix_16(digits: str) -> bool:
-    """Ложный PAN: YYYYMMDD + ещё 8 цифр (часто время 00000000)."""
     if len(digits) != 16:
         return False
     y, m, d = int(digits[0:4]), int(digits[4:6]), int(digits[6:8])
     if not _valid_calendar(y, m, d):
         return False
     tail = digits[8:]
-    if tail == "00000000" or tail == "0000000":
-        return True
-    if tail.endswith("0000"):
-        return True
-    return False
+    return tail in {"00000000", "0000000"} or tail.endswith("0000")
 
 
 def _has_date_separators(text: str) -> bool:
@@ -121,10 +120,18 @@ def is_plausible_pan(
     line: str,
     start: int,
     end: int,
+    *,
+    mixed_alnum: bool = False,
 ) -> bool:
     if len(digits) < 13 or len(digits) > 19:
         return False
-    if not _allowed_chars_only(matched_text):
+    if mixed_alnum:
+        if _digit_ratio(matched_text) < 0.62:
+            return False
+        letters = sum(ch.isalpha() for ch in matched_text)
+        if letters > 8:
+            return False
+    elif not _allowed_chars_only(matched_text):
         return False
     if _has_date_separators(matched_text):
         return False
@@ -146,43 +153,81 @@ class PanDetector:
         pan_cfg = config.get("pan", {})
         self.enabled = pan_cfg.get("enabled", True)
         self.use_luhn = pan_cfg.get("use_luhn", True)
+        self.context_radius = int(pan_cfg.get("context_radius", 30))
+        self.scan_mixed = pan_cfg.get("scan_mixed_alnum", True)
         patterns = [re.compile(p) for p in pan_cfg.get("regex_list", [])]
         if pan_cfg.get("use_grouped_scan", True):
             patterns.append(PAN_GROUPED_RE)
         self._patterns = patterns
+
+    def _yield_match(
+        self,
+        line: str,
+        file_path: str,
+        line_no: int,
+        text: str,
+        start: int,
+        end: int,
+        seen: set[tuple[int, int]],
+        *,
+        mixed: bool = False,
+    ) -> Iterator[Finding]:
+        span = (start, end)
+        if span in seen:
+            return
+        digits = _digits_only(text)
+        if not is_plausible_pan(
+            text, digits, line, start, end, mixed_alnum=mixed
+        ):
+            return
+        if self.use_luhn and not luhn_valid(digits):
+            return
+        seen.add(span)
+        yield Finding.create(
+            file_path=file_path,
+            line_no=line_no,
+            column=start,
+            match_type="PAN",
+            matched_text=text,
+            line=line,
+            match_start=start,
+            match_end=end,
+            context_radius=self.context_radius,
+        )
 
     def scan_line(
         self,
         line: str,
         file_path: str,
         line_no: int,
-        context_len: int = 40,
+        context_len: int = 30,
     ) -> Iterator[Finding]:
+        del context_len
         if not self.enabled:
             return
-        digit_count = sum(ch.isdigit() for ch in line)
-        if digit_count < 13:
+        if sum(ch.isdigit() for ch in line) < 13:
             return
         seen: set[tuple[int, int]] = set()
         for pattern in self._patterns:
             for match in pattern.finditer(line):
-                span = (match.start(), match.end())
-                if span in seen:
-                    continue
-                text = match.group(0)
-                digits = _digits_only(text)
-                if not is_plausible_pan(text, digits, line, span[0], span[1]):
-                    continue
-                if self.use_luhn and not luhn_valid(digits):
-                    continue
-                seen.add(span)
-                ctx_start = max(0, span[0] - context_len)
-                ctx_end = min(len(line), span[1] + context_len)
-                yield Finding.create(
-                    file_path=file_path,
-                    line_no=line_no,
-                    column=span[0],
-                    match_type="PAN",
-                    matched_text=text,
-                    context=line[ctx_start:ctx_end].strip(),
+                yield from self._yield_match(
+                    line,
+                    file_path,
+                    line_no,
+                    match.group(0),
+                    match.start(),
+                    match.end(),
+                    seen,
+                )
+        if self.scan_mixed:
+            for match in MIXED_ALNUM_RE.finditer(line):
+                yield from self._yield_match(
+                    line,
+                    file_path,
+                    line_no,
+                    match.group(1),
+                    match.start(1),
+                    match.end(1),
+                    seen,
+                    mixed=True,
                 )
