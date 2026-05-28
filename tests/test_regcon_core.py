@@ -95,12 +95,14 @@ def test_bulk_profile_finds_regex_pan():
     assert len(hits) == 1
 
 
-def test_bin_filter_skips_line_without_hint():
+def test_prefix_filter_skips_line_without_bin():
     cfg = {
         "pan": {
             "enabled": True,
             "scan_profile": "bulk",
-            "bin_line_filter": True,
+            "prefix_file": "__none__",
+            "prefix_line_filter": True,
+            "prefix_require_match": True,
             "bin_line_hints": ["9112"],
             "regex_list": [],
             "use_grouped_scan": False,
@@ -110,6 +112,15 @@ def test_bin_filter_skips_line_without_hint():
     det.begin_file(0)
     line = "card 4111 1111 1111 1111"
     assert list(det.scan_line(line, "f.log", 1)) == []
+
+
+def test_prefix_index_allows_matching_digits():
+    from regcon.util.pan_prefix_index import PanPrefixIndex
+
+    idx = PanPrefixIndex(["4111", "411111"])
+    assert idx.line_may_contain("x4111111111111111y")
+    assert idx.digits_allowed("4111111111111111")
+    assert not idx.digits_allowed("5500000000000004")
 
 
 def test_auto_bulk_on_large_file():

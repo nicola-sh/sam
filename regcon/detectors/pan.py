@@ -6,7 +6,9 @@ from typing import Iterator
 from regcon.detectors.pan_bulk import iter_bulk_digit_runs, skip_obvious_non_pan_line
 from regcon.detectors.pan_luhn import luhn_valid_digits
 from regcon.models import Finding
-from regcon.util.digit_scan import PanLineFlags, line_has_bin_hint, precheck_pan_line
+from regcon.config.pan_prefixes import resolve_prefix_path
+from regcon.util.digit_scan import PanLineFlags, precheck_pan_line
+from regcon.util.pan_prefix_index import PanPrefixIndex, build_prefix_index
 
 PAN_GROUPED_RE = re.compile(
     r"\b(?:\d{4}[ -]){2,4}\d{1,4}\b|\b\d{13,19}\b"
@@ -155,6 +157,7 @@ def _scan_digit_segment(
     date_spans: list[tuple[int, int]] | None,
     seen_digits: set[str],
     check_dates: bool,
+    prefix_index: PanPrefixIndex | None = None,
 ) -> Iterator[tuple[int, int, str]]:
     digits_joined = "".join(line[i] for i in indices)
     dlen = len(digits_joined)
@@ -166,6 +169,8 @@ def _scan_digit_segment(
         for offset in range(dlen - length + 1):
             chunk = digits_joined[offset : offset + length]
             if chunk in seen_digits:
+                continue
+            if prefix_index is not None and not prefix_index.digits_allowed(chunk):
                 continue
             if not luhn_valid_digits(chunk):
                 continue
@@ -189,6 +194,7 @@ def _iter_pan_from_digit_runs(
     max_gap: int,
     date_spans: list[tuple[int, int]] | None,
     check_dates: bool,
+    prefix_index: PanPrefixIndex | None = None,
 ) -> Iterator[tuple[int, int, str]]:
     indices = [i for i, ch in enumerate(line) if ch.isdigit()]
     if len(indices) < 13:
@@ -196,7 +202,7 @@ def _iter_pan_from_digit_runs(
     seen_digits: set[str] = set()
     for segment in _group_digit_segments(indices, max_gap):
         yield from _scan_digit_segment(
-            line, segment, date_spans, seen_digits, check_dates
+            line, segment, date_spans, seen_digits, check_dates, prefix_index
         )
 
 
@@ -204,6 +210,7 @@ def _iter_pan_from_line_spans(
     line: str,
     date_spans: list[tuple[int, int]] | None,
     check_dates: bool,
+    prefix_index: PanPrefixIndex | None = None,
 ) -> Iterator[tuple[int, int, str]]:
     i = 0
     n = len(line)
@@ -226,6 +233,8 @@ def _iter_pan_from_line_spans(
             span = line[i:j]
             if _allowed_pan_chars_only(span):
                 digits = _digits_only(span)
+                if prefix_index is not None and not prefix_index.digits_allowed(digits):
+                    continue
                 if luhn_valid_digits(digits) and is_plausible_pan(
                     digits,
                     line,
@@ -268,14 +277,22 @@ class PanDetector:
         self._profile_setting = str(pan_cfg.get("scan_profile", "auto")).lower()
         self._auto_bulk_bytes = int(pan_cfg.get("auto_bulk_file_mb", 20)) * 1024 * 1024
         self._bulk_digit_run = bool(pan_cfg.get("bulk_digit_run", True))
-        self._bin_hints = _parse_bin_hints(
-            regex_list, list(pan_cfg.get("bin_line_hints", []))
+        extra_hints = tuple(
+            _parse_bin_hints(regex_list, list(pan_cfg.get("bin_line_hints", [])))
         )
-        self._use_bin_filter = bool(pan_cfg.get("bin_line_filter", True)) and bool(
-            self._bin_hints
-        )
+        prefix_path = resolve_prefix_path(config)
+        self._prefix_index = build_prefix_index(prefix_path, extra_hints)
+        self._prefix_line_filter = bool(
+            pan_cfg.get("prefix_line_filter", True)
+        ) and self._prefix_index.enabled
+        self._prefix_require_match = bool(
+            pan_cfg.get("prefix_require_match", True)
+        ) and self._prefix_index.enabled
+        # Устаревшее имя опции — то же, что prefix_line_filter
+        if pan_cfg.get("bin_line_filter") is False:
+            self._prefix_line_filter = False
         self._active_profile = "normal"
-        workers = pan_cfg.get("parallel_workers", 0)
+        workers = pan_cfg.get("parallel_workers", "auto")
         if workers == "auto":
             import os
 
@@ -302,15 +319,20 @@ class PanDetector:
     def wants_parallel_scan(self, file_size_bytes: int) -> bool:
         if self._parallel_workers <= 0:
             return False
-        if file_size_bytes < self._parallel_min_bytes:
-            return False
-        return self._active_profile == "bulk"
+        return file_size_bytes >= self._parallel_min_bytes
+
+    @property
+    def prefix_count(self) -> int:
+        return self._prefix_index.count
 
     def parallel_workers(self) -> int:
         return self._parallel_workers
 
     def parallel_chunk_lines(self) -> int:
         return self._parallel_chunk
+
+    def parallel_min_bytes(self) -> int:
+        return self._parallel_min_bytes
 
     def _use_embedded(self, has_alpha: bool) -> bool:
         if self._active_profile == "bulk":
@@ -335,6 +357,10 @@ class PanDetector:
             span = (start, end)
             if span in seen:
                 continue
+            if self._prefix_require_match and not self._prefix_index.digits_allowed(
+                digits
+            ):
+                continue
             if self.use_luhn and not luhn_valid_digits(digits):
                 continue
             seen.add(span)
@@ -357,7 +383,10 @@ class PanDetector:
                 if not _allowed_pan_chars_only(text):
                     continue
                 digits = _digits_only(text)
-                if len(digits) >= 13:
+                if len(digits) >= 13 and (
+                    not self._prefix_require_match
+                    or self._prefix_index.digits_allowed(digits)
+                ):
                     yield match.start(), match.end(), digits
 
     def scan_line(
@@ -370,7 +399,7 @@ class PanDetector:
         del context_len
         if not self.enabled:
             return
-        if self._use_bin_filter and not line_has_bin_hint(line, self._bin_hints):
+        if self._prefix_line_filter and not self._prefix_index.line_may_contain(line):
             return
 
         flags = precheck_pan_line(line)
@@ -436,7 +465,14 @@ class PanDetector:
                 line,
                 file_path,
                 line_no,
-                with_plausible(iter_bulk_digit_runs(line)),
+                with_plausible(
+                    iter_bulk_digit_runs(
+                        line,
+                        digits_allowed=self._prefix_index.digits_allowed
+                        if self._prefix_require_match
+                        else None,
+                    )
+                ),
                 seen,
             )
 
@@ -478,7 +514,11 @@ class PanDetector:
                 line,
                 file_path,
                 line_no,
-                plausible(_iter_pan_from_line_spans(line, date_spans, check_dates)),
+                plausible(
+                    _iter_pan_from_line_spans(
+                        line, date_spans, check_dates, self._prefix_index
+                    )
+                ),
                 seen,
             )
 
@@ -493,6 +533,7 @@ class PanDetector:
                         self._embedded_max_gap,
                         date_spans,
                         check_dates,
+                        self._prefix_index,
                     )
                 ),
                 seen,

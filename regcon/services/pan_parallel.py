@@ -10,11 +10,10 @@ from regcon.services.scan_line import scan_line_with_detectors
 from regcon.util.cancel import CancelCallback, check_cancelled
 
 
-def _scan_chunk(args: tuple[list[str], int, str, dict]) -> list[dict]:
-    lines, start_line_no, file_path, config = args
+def _scan_chunk(args: tuple[list[str], int, str, dict, int]) -> list[dict]:
+    lines, start_line_no, file_path, config, file_size = args
     pan = PanDetector(config)
-    pan.begin_file(10**12)
-    pan._active_profile = "bulk"
+    pan.begin_file(file_size)
     ip = IpDetector(config)
     secrets = SecretDetector(config)
     out: list[dict] = []
@@ -36,6 +35,7 @@ def scan_text_file_parallel(
     path: Path,
     config: dict,
     file_path: str,
+    file_size: int,
     workers: int,
     chunk_lines: int,
     cancel: CancelCallback,
@@ -70,7 +70,7 @@ def scan_text_file_parallel(
                 futures.append(
                     pool.submit(
                         _scan_chunk,
-                        (chunk, chunk_start, file_path, config),
+                        (chunk, chunk_start, file_path, config, file_size),
                     )
                 )
                 chunk = []
@@ -80,7 +80,7 @@ def scan_text_file_parallel(
                 futures.append(
                     pool.submit(
                         _scan_chunk,
-                        (chunk, chunk_start, file_path, config),
+                        (chunk, chunk_start, file_path, config, file_size),
                     )
                 )
 
