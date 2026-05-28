@@ -10,6 +10,7 @@ from typing import Callable
 from regcon.maskers.masker import apply_replacements, findings_to_replacements
 from regcon.models import Finding
 from regcon.services.scanner import FileScanner
+from regcon.util.cancel import CancelCallback, check_cancelled
 
 try:
     import openpyxl
@@ -38,15 +39,18 @@ class FileProcessor(FileScanner):
         findings_by_line: dict[int, list[Finding]],
         output_dir: Path,
         on_line: Callable[[int], None] | None = None,
+        cancel: CancelCallback = None,
     ) -> Path:
         target = self.output_path(path, output_dir)
         target.parent.mkdir(parents=True, exist_ok=True)
+        every = int(self.config.get("regcon", {}).get("progress_every_lines", 5000))
         with self._open_text(path) as src, target.open(
             "w", encoding=self.encoding, newline=""
         ) as dst:
             for line_no, line in enumerate(src, start=1):
-                if on_line:
+                if on_line and (line_no == 1 or line_no % every == 0):
                     on_line(line_no)
+                check_cancelled(cancel)
                 raw = line.rstrip("\n\r")
                 newline = line[len(raw) :]
                 items = findings_by_line.get(line_no, [])
@@ -184,6 +188,7 @@ class FileProcessor(FileScanner):
         findings: list[Finding],
         output_dir: Path,
         on_line: Callable[[int], None] | None = None,
+        cancel: CancelCallback = None,
     ) -> Path:
         selected = [f for f in findings if f.selected]
         by_line: dict[int, list[Finding]] = defaultdict(list)
@@ -191,12 +196,12 @@ class FileProcessor(FileScanner):
             by_line[item.line_no].append(item)
         suffix = path.suffix.lower()
         if suffix in {".txt", ".log", ".json"}:
-            return self.mask_text_file(path, by_line, output_dir, on_line)
+            return self.mask_text_file(path, by_line, output_dir, on_line, cancel)
         if suffix == ".csv":
             return self.mask_csv_file(path, by_line, output_dir, on_line)
         if suffix in {".xlsx", ".xlsm", ".xls"}:
             return self.mask_excel_file(path, by_line, output_dir, on_line)
-        return self.mask_text_file(path, by_line, output_dir, on_line)
+        return self.mask_text_file(path, by_line, output_dir, on_line, cancel)
 
     def format_json_in_text_file(
         self,
@@ -204,15 +209,18 @@ class FileProcessor(FileScanner):
         output_dir: Path,
         indent: int = 2,
         on_line: Callable[[int], None] | None = None,
+        cancel: CancelCallback = None,
     ) -> Path:
         target = output_dir / f"{path.stem}_jsonfmt{path.suffix}"
         target.parent.mkdir(parents=True, exist_ok=True)
+        every = int(self.config.get("regcon", {}).get("progress_every_lines", 5000))
         with self._open_text(path) as src, target.open(
             "w", encoding=self.encoding, newline=""
         ) as dst:
             for line_no, line in enumerate(src, start=1):
-                if on_line:
+                if on_line and (line_no == 1 or line_no % every == 0):
                     on_line(line_no)
+                check_cancelled(cancel)
                 raw = line.rstrip("\n\r")
                 newline = line[len(raw) :]
                 formatted = self._format_json_fragments(raw, indent)

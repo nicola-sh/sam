@@ -12,16 +12,17 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "encoding": "utf-8",
         "fallback_encoding": "cp1251",
         "audit_log": "regcon_actions.log",
+        "progress_every_lines": 5000,
+        "max_table_rows": 5000,
     },
     "pan": {
         "enabled": True,
         "use_luhn": True,
         "mask_keep_first": 6,
         "mask_keep_last": 4,
-        "generic_16_digit": True,
+        "use_grouped_scan": True,
         "regex_list": [
             r"9112\s?39[0-9]{2}\s?[0-9]{4}\s?[0-9]{4}",
-            r"\b(?:\d[ -]*?){13,19}\b",
         ],
     },
     "ip": {
@@ -43,6 +44,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "json": {
         "enabled": True,
         "indent": 2,
+        "format_on_csv_export": True,
     },
 }
 

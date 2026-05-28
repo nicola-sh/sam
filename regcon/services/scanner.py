@@ -6,6 +6,8 @@ from typing import Callable, Iterator
 
 from regcon.detectors import IpDetector, PanDetector, SecretDetector
 from regcon.models import Finding
+from regcon.services.scan_line import scan_line_with_detectors
+from regcon.util.cancel import CancelCallback, check_cancelled
 
 try:
     import openpyxl
@@ -21,14 +23,39 @@ except ImportError:  # pragma: no cover
 class FileScanner:
     def __init__(self, config: dict) -> None:
         self.config = config
-        self._detectors = [
-            PanDetector(config),
-            IpDetector(config),
-            SecretDetector(config),
-        ]
+        self._pan = PanDetector(config)
+        self._ip = IpDetector(config)
+        self._secrets = SecretDetector(config)
         rc = config.get("regcon", {})
         self.encoding = rc.get("encoding", "utf-8")
         self.fallback_encoding = rc.get("fallback_encoding", "cp1251")
+        self._progress_every = int(rc.get("progress_every_lines", 5000))
+
+    def _scan_cell(
+        self,
+        cell_text: str,
+        file_path: str,
+        line_no: int,
+        col_idx: int,
+        cell_label: str,
+        findings: list[Finding],
+    ) -> None:
+        for item in scan_line_with_detectors(
+            cell_text, file_path, line_no, self._pan, self._ip, self._secrets
+        ):
+            item.column = col_idx
+            item.cell = cell_label
+            findings.append(item)
+
+    def _tick(
+        self,
+        line_no: int,
+        on_line: Callable[[int], None] | None,
+        cancel: CancelCallback,
+    ) -> None:
+        if on_line and (line_no == 1 or line_no % self._progress_every == 0):
+            on_line(line_no)
+        check_cancelled(cancel)
 
     def _open_text(self, path: Path):
         try:
@@ -40,55 +67,60 @@ class FileScanner:
         self,
         path: Path,
         on_line: Callable[[int], None] | None = None,
+        cancel: CancelCallback = None,
     ) -> list[Finding]:
         findings: list[Finding] = []
         file_path = str(path)
         with self._open_text(path) as handle:
             for line_no, line in enumerate(handle, start=1):
-                if on_line:
-                    on_line(line_no)
-                for detector in self._detectors:
-                    findings.extend(
-                        detector.scan_line(line.rstrip("\n\r"), file_path, line_no)
+                self._tick(line_no, on_line, cancel)
+                stripped = line.rstrip("\n\r")
+                findings.extend(
+                    scan_line_with_detectors(
+                        stripped,
+                        file_path,
+                        line_no,
+                        self._pan,
+                        self._ip,
+                        self._secrets,
                     )
+                )
         return findings
 
     def scan_csv_file(
         self,
         path: Path,
         on_line: Callable[[int], None] | None = None,
+        cancel: CancelCallback = None,
     ) -> list[Finding]:
         if pd is not None:
-            return self._scan_csv_pandas(path, on_line)
-        return self._scan_csv_stdlib(path, on_line)
+            return self._scan_csv_pandas(path, on_line, cancel)
+        return self._scan_csv_stdlib(path, on_line, cancel)
 
     def _scan_csv_stdlib(
         self,
         path: Path,
         on_line: Callable[[int], None] | None = None,
+        cancel: CancelCallback = None,
     ) -> list[Finding]:
         findings: list[Finding] = []
         file_path = str(path)
         with self._open_text(path) as handle:
             reader = csv.reader(handle)
             for line_no, row in enumerate(reader, start=1):
-                if on_line:
-                    on_line(line_no)
+                self._tick(line_no, on_line, cancel)
                 for col_idx, cell in enumerate(row):
-                    cell_text = str(cell)
-                    for detector in self._detectors:
-                        for item in detector.scan_line(
-                            cell_text, file_path, line_no
-                        ):
-                            item.column = col_idx
-                            item.cell = self._cell_name(col_idx, line_no)
-                            findings.append(item)
+                    label = self._cell_name(col_idx, line_no)
+                    self._scan_cell(
+                        str(cell), file_path, line_no, col_idx, label, findings
+                    )
         return findings
 
     def _scan_csv_pandas(
         self,
         path: Path,
         on_line: Callable[[int], None] | None = None,
+        cancel: CancelCallback = None,
     ) -> list[Finding]:
         findings: list[Finding] = []
         file_path = str(path)
@@ -97,7 +129,7 @@ class FileScanner:
                 path,
                 dtype=str,
                 keep_default_na=False,
-                chunksize=5000,
+                chunksize=10000,
                 encoding=self.encoding,
             )
         except UnicodeDecodeError:
@@ -105,30 +137,28 @@ class FileScanner:
                 path,
                 dtype=str,
                 keep_default_na=False,
-                chunksize=5000,
+                chunksize=10000,
                 encoding=self.fallback_encoding,
             )
         line_no = 0
         for chunk in chunks:
-            for _, row in chunk.iterrows():
+            check_cancelled(cancel)
+            values = chunk.to_numpy(dtype=str)
+            for row in values:
                 line_no += 1
-                if on_line:
-                    on_line(line_no)
-                for col_idx, value in enumerate(row.tolist()):
-                    cell_text = str(value)
-                    for detector in self._detectors:
-                        for item in detector.scan_line(
-                            cell_text, file_path, line_no
-                        ):
-                            item.column = col_idx
-                            item.cell = self._cell_name(col_idx, line_no)
-                            findings.append(item)
+                self._tick(line_no, on_line, cancel)
+                for col_idx, cell_text in enumerate(row):
+                    label = self._cell_name(col_idx, line_no)
+                    self._scan_cell(
+                        str(cell_text), file_path, line_no, col_idx, label, findings
+                    )
         return findings
 
     def scan_excel_file(
         self,
         path: Path,
         on_line: Callable[[int], None] | None = None,
+        cancel: CancelCallback = None,
     ) -> list[Finding]:
         if openpyxl is None:
             raise RuntimeError("openpyxl не установлен — нужен для Excel")
@@ -136,59 +166,60 @@ class FileScanner:
         file_path = str(path)
         workbook = openpyxl.load_workbook(path, read_only=True, data_only=True)
         line_no = 0
-        for sheet in workbook.worksheets:
-            for row in sheet.iter_rows(values_only=True):
-                line_no += 1
-                if on_line:
-                    on_line(line_no)
-                for col_idx, value in enumerate(row):
-                    if value is None:
-                        continue
-                    cell_text = str(value)
-                    for detector in self._detectors:
-                        for item in detector.scan_line(
-                            cell_text, file_path, line_no
-                        ):
-                            item.column = col_idx
-                            item.cell = f"{sheet.title}!{self._cell_name(col_idx, line_no)}"
-                            findings.append(item)
-        workbook.close()
+        try:
+            for sheet in workbook.worksheets:
+                for row in sheet.iter_rows(values_only=True):
+                    line_no += 1
+                    self._tick(line_no, on_line, cancel)
+                    for col_idx, value in enumerate(row):
+                        if value is None:
+                            continue
+                        label = f"{sheet.title}!{self._cell_name(col_idx, line_no)}"
+                        self._scan_cell(
+                            str(value),
+                            file_path,
+                            line_no,
+                            col_idx,
+                            label,
+                            findings,
+                        )
+        finally:
+            workbook.close()
         return findings
 
     def scan_file(
         self,
         path: Path,
         on_line: Callable[[int], None] | None = None,
+        cancel: CancelCallback = None,
     ) -> list[Finding]:
         suffix = path.suffix.lower()
         if suffix in {".txt", ".log", ".json"}:
-            return self.scan_text_file(path, on_line)
+            return self.scan_text_file(path, on_line, cancel)
         if suffix == ".csv":
-            return self.scan_csv_file(path, on_line)
+            return self.scan_csv_file(path, on_line, cancel)
         if suffix in {".xlsx", ".xlsm"}:
-            return self.scan_excel_file(path, on_line)
+            return self.scan_excel_file(path, on_line, cancel)
         if suffix == ".xls" and pd is not None:
-            return self._scan_legacy_xls(path, on_line)
-        return self.scan_text_file(path, on_line)
+            return self._scan_legacy_xls(path, on_line, cancel)
+        return self.scan_text_file(path, on_line, cancel)
 
     def _scan_legacy_xls(
         self,
         path: Path,
         on_line: Callable[[int], None] | None = None,
+        cancel: CancelCallback = None,
     ) -> list[Finding]:
         findings: list[Finding] = []
         file_path = str(path)
         frame = pd.read_excel(path, dtype=str, header=None)
         for line_no, row in enumerate(frame.itertuples(index=False), start=1):
-            if on_line:
-                on_line(line_no)
+            self._tick(line_no, on_line, cancel)
             for col_idx, value in enumerate(row):
-                cell_text = str(value)
-                for detector in self._detectors:
-                    for item in detector.scan_line(cell_text, file_path, line_no):
-                        item.column = col_idx
-                        item.cell = self._cell_name(col_idx, line_no)
-                        findings.append(item)
+                label = self._cell_name(col_idx, line_no)
+                self._scan_cell(
+                    str(value), file_path, line_no, col_idx, label, findings
+                )
         return findings
 
     @staticmethod
