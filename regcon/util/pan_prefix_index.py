@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from regcon.config.pan_prefixes import DEFAULT_PREFIX_LEN, load_prefix_lines
-from regcon.detectors.pan_luhn import luhn_valid_digits
+from regcon.util.pan_luhn import luhn_valid_digits
 
 # Длины PAN после совпадения 8 цифр префикса (сначала типичная 16)
 _PAN_LENGTHS = (16, 19, 18, 17, 15, 14, 13)

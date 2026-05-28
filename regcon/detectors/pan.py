@@ -4,7 +4,7 @@ import re
 from typing import Iterator
 
 from regcon.config.pan_prefixes import DEFAULT_PREFIX_LEN, resolve_prefix_path
-from regcon.detectors.pan_luhn import luhn_valid_digits
+from regcon.util.pan_luhn import luhn_valid_digits
 from regcon.models import Finding
 from regcon.util.pan_prefix_index import PanPrefixIndex, build_prefix_index
 
