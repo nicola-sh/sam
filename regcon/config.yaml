@@ -1,0 +1,37 @@
+# Локальная конфигурация RegCon (скопировано из config.example.yaml)
+
+regcon:
+  output_suffix: "_masked"
+  encoding: utf-8
+  fallback_encoding: cp1251
+  audit_log: regcon_actions.log
+
+pan:
+  enabled: true
+  use_luhn: true
+  mask_keep_first: 6
+  mask_keep_last: 4
+  generic_16_digit: true
+  regex_list:
+    - '9112\s?39[0-9]{2}\s?[0-9]{4}\s?[0-9]{4}'
+
+ip:
+  enabled: true
+  mask_mode: last_two
+  whitelist:
+    - "127.0.0.1"
+    - "::1"
+
+passwords:
+  enabled: true
+  patterns:
+    - '(?i)(password|pwd|passwd|secret|token)\s*[=:]\s*(\S+)'
+
+excel:
+  auto_filter: true
+  freeze_header: true
+  max_column_width: 60
+
+json:
+  enabled: true
+  indent: 2

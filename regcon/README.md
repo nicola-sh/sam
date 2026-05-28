@@ -270,10 +270,30 @@ regcon/
 
 ---
 
+## Запуск
+
+```bat
+REM из корня репозитория (после scripts\install_offline.bat)
+python -m regcon
+
+REM или
+run_regcon.bat
+```
+
+Тесты (без GUI):
+
+```bat
+python -m pytest tests/test_regcon_core.py -q
+```
+
 ## Статус
 
 | Компонент | Статус |
 |-----------|--------|
 | Описание (этот README) | Готово |
-| Исходный черновик `regcon.py` | Есть у заказчика (PyQt Worker) |
-| Реализация модулей | Не начата |
+| GUI PyQt6/PyQt5 | Готово |
+| PAN + Luhn, IP, пароли | Готово |
+| Подтверждение перед маской | Готово |
+| txt / csv / xlsx | Готово |
+| CSV → Excel, JSON format | Готово |
+| Аудит `regcon_actions.log` | Готово |
