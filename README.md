@@ -19,6 +19,8 @@
 
 > **Офлайн-библиотеки:** полный список из 59 локальных пакетов (`DATA\req.txt`), установка без интернета и привязка к SAM — в [`docs/AVAILABLE_LIBRARIES.md`](docs/AVAILABLE_LIBRARIES.md). Скрипт установки: `scripts\install_offline.bat`.
 
+> **RegCon** (отдельное приложение): обезличивание логов (PAN, IP, пароли), подтверждение замен, CSV→Excel — [`regcon/README.md`](regcon/README.md).
+
 ---
 
 ## Целевая модель данных
