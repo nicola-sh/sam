@@ -129,9 +129,11 @@ class MainWindow(QMainWindow):
         prefix_n = build_prefix_index(
             prefix_path, ()
         ).count
-        pan_tip = "Карты (Luhn); в таблице только цифры"
+        pan_tip = "PAN: первые 8 цифр из справочника → Luhn"
         if prefix_n:
-            pan_tip += f"; префиксов: {prefix_n} ({prefix_path.name})"
+            pan_tip += f" ({prefix_n} шт., {prefix_path.name})"
+        else:
+            pan_tip += " — заполните config/pan_prefixes.txt"
         self.chk_pan.setToolTip(pan_tip)
         self.chk_ip = QCheckBox("IP")
         self.chk_ip.setChecked(ip_cfg.get("enabled", True))

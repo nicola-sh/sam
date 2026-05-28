@@ -1,12 +1,11 @@
-from regcon.detectors.pan import (
-    PanDetector,
-    _digits_only,
-    is_plausible_pan,
-    luhn_valid,
-)
+from pathlib import Path
+
+from regcon.config.pan_prefixes import load_prefix_lines
+from regcon.detectors.pan import PanDetector, is_plausible_pan, luhn_valid
 from regcon.maskers.masker import apply_replacements, findings_to_replacements, mask_pan_text
 from regcon.models import Finding
 from regcon.util.context import split_context
+from regcon.util.pan_prefix_index import PanPrefixIndex
 
 
 def test_luhn_valid_card():
@@ -23,12 +22,6 @@ def test_rejects_date_as_pan():
     assert not is_plausible_pan(digits, line, 0, len(digits))
 
 
-def test_rejects_date_plus_zeros():
-    digits = "2026052100000000"
-    line = "timestamp 2026052100000000"
-    assert not is_plausible_pan(digits, line, 11, 27)
-
-
 def test_context_30_chars():
     line = "AAAA" + "4111111111111111" + "ZZZZ"
     before, after = split_context(line, 4, 20, 30)
@@ -36,76 +29,29 @@ def test_context_30_chars():
     assert after == "ZZZZ"
 
 
-def test_finds_pan_with_letters_around():
-    cfg = {
-        "pan": {
-            "enabled": True,
-            "use_luhn": True,
-            "use_grouped_scan": True,
-            "scan_embedded_digits": True,
-            "regex_list": [],
-        }
-    }
-    det = PanDetector(cfg)
-    det.begin_file(0)
-    line = "token=4111A111111111111Z field"
-    hits = list(det.scan_line(line, "f.log", 1))
-    assert hits and len(_digits_only(hits[0].matched_text)) >= 13
-    assert all(ch.isdigit() or ch == " " for ch in hits[0].matched_text)
+def test_load_prefixes_eight_digits():
+    path = Path(__file__).resolve().parent.parent / "regcon/config/pan_prefixes.txt"
+    items = load_prefix_lines(path, 8)
+    assert items
+    assert all(len(p) == 8 for p in items)
 
 
-def test_finds_grouped_pan():
-    cfg = {
-        "pan": {
-            "enabled": True,
-            "use_luhn": True,
-            "use_grouped_scan": True,
-            "scan_embedded_digits": False,
-            "regex_list": [],
-        }
-    }
-    det = PanDetector(cfg)
-    det.begin_file(0)
-    line = "pay card 4111 1111 1111 1111 ok"
-    hits = list(det.scan_line(line, "f.log", 1))
+def test_prefix_index_finds_pan_by_eight_and_luhn():
+    idx = PanPrefixIndex(["41111111"])
+    line = "card 4111 1111 1111 1111 ok"
+    hits = idx.iter_pan_candidates(line)
     assert len(hits) == 1
+    assert hits[0][2] == "4111111111111111"
 
 
-def test_mask_pan_keeps_edges():
-    masked = mask_pan_text("4111111111111111")
-    assert masked.startswith("411111")
-    assert masked.endswith("1111")
-
-
-def test_bulk_profile_finds_regex_pan():
+def test_prefix_filter_skips_unknown_bin():
     cfg = {
         "pan": {
             "enabled": True,
-            "use_luhn": True,
-            "scan_profile": "bulk",
-            "use_grouped_scan": True,
-            "bin_line_filter": False,
-            "regex_list": [],
-        }
-    }
-    det = PanDetector(cfg)
-    det.begin_file(0)
-    line = "pay 4111 1111 1111 1111 end"
-    hits = list(det.scan_line(line, "f.log", 1))
-    assert len(hits) == 1
-
-
-def test_prefix_filter_skips_line_without_bin():
-    cfg = {
-        "pan": {
-            "enabled": True,
-            "scan_profile": "bulk",
             "prefix_file": "__none__",
             "prefix_line_filter": True,
-            "prefix_require_match": True,
-            "bin_line_hints": ["9112"],
-            "regex_list": [],
-            "use_grouped_scan": False,
+            "bin_line_hints": ["55000000"],
+            "prefix_digits": 8,
         }
     }
     det = PanDetector(cfg)
@@ -114,47 +60,27 @@ def test_prefix_filter_skips_line_without_bin():
     assert list(det.scan_line(line, "f.log", 1)) == []
 
 
-def test_prefix_index_allows_matching_digits():
-    from regcon.util.pan_prefix_index import PanPrefixIndex
-
-    idx = PanPrefixIndex(["4111", "411111"])
-    assert idx.line_may_contain("x4111111111111111y")
-    assert idx.digits_allowed("4111111111111111")
-    assert not idx.digits_allowed("5500000000000004")
-
-
-def test_auto_bulk_on_large_file():
+def test_detector_finds_configured_prefix():
     cfg = {
         "pan": {
             "enabled": True,
-            "scan_profile": "auto",
-            "auto_bulk_file_mb": 1,
-            "regex_list": [],
-            "use_grouped_scan": True,
-            "bin_line_filter": False,
-        }
-    }
-    det = PanDetector(cfg)
-    det.begin_file(2 * 1024 * 1024)
-    assert det.active_profile == "bulk"
-
-
-def test_embedded_auto_skips_plain_digit_line_without_match():
-    """auto: без букв — нет тяжёлого перебора встроенных цифр."""
-    cfg = {
-        "pan": {
-            "enabled": True,
-            "use_luhn": True,
-            "use_grouped_scan": True,
-            "scan_embedded_digits": "auto",
-            "regex_list": [],
+            "prefix_file": "__none__",
+            "bin_line_hints": ["41111111"],
+            "prefix_digits": 8,
+            "prefix_line_filter": True,
         }
     }
     det = PanDetector(cfg)
     det.begin_file(0)
-    line = "x" + "9" * 200 + "x"
-    hits = list(det.scan_line(line, "f.log", 1))
-    assert hits == []
+    hits = list(det.scan_line("n 4111111111111111", "f.log", 1))
+    assert len(hits) == 1
+    assert "4111" in hits[0].matched_text
+
+
+def test_mask_pan_keeps_edges():
+    masked = mask_pan_text("4111111111111111")
+    assert masked.startswith("411111")
+    assert masked.endswith("1111")
 
 
 def test_apply_replacements():

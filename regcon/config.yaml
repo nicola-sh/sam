@@ -1,4 +1,4 @@
-# Локальная конфигурация RegCon (скопировано из config.example.yaml)
+# Локальная конфигурация RegCon
 
 regcon:
   output_suffix: "_masked"
@@ -17,24 +17,16 @@ pan:
   use_luhn: true
   mask_keep_first: 6
   mask_keep_last: 4
-  use_grouped_scan: true
+  prefix_file: config/pan_prefixes.txt
+  prefix_digits: 8
+  prefix_line_filter: true
   scan_profile: auto
   auto_bulk_file_mb: 20
-  prefix_file: config/pan_prefixes.txt
-  prefix_line_filter: true
-  prefix_require_match: true
-  bin_line_filter: true
-  bin_line_hints: []
-  bulk_digit_run: true
-  scan_embedded_digits: auto
-  embedded_max_digit_gap: 4
-  deep_scan_max_digits: 96
   parallel_workers: auto
   parallel_chunk_lines: 250000
   parallel_min_file_mb: 20
   context_radius: 30
-  regex_list:
-    - '9112\s?39[0-9]{2}\s?[0-9]{4}\s?[0-9]{4}'
+  bin_line_hints: []
 
 ip:
   enabled: true

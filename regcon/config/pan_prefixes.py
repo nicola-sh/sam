@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+DEFAULT_PREFIX_LEN = 8
+
 
 def regcon_root() -> Path:
     return Path(__file__).resolve().parent.parent
@@ -18,8 +20,11 @@ def resolve_prefix_path(config: dict) -> Path | None:
     return path
 
 
-def load_prefix_lines(path: Path) -> list[str]:
-    """Читает префиксы PAN (по одному на строку, только цифры)."""
+def load_prefix_lines(path: Path, prefix_len: int = DEFAULT_PREFIX_LEN) -> list[str]:
+    """
+  Загружает первые N цифр PAN из txt (по одной записи на строку).
+  Строка должна содержать не меньше prefix_len цифр (обычно ровно 8).
+    """
     if not path.is_file():
         return []
     prefixes: list[str] = []
@@ -30,10 +35,10 @@ def load_prefix_lines(path: Path) -> list[str]:
             if not line or line.startswith("#"):
                 continue
             digits = "".join(ch for ch in line if ch.isdigit())
-            if len(digits) < 4:
+            if len(digits) < prefix_len:
                 continue
-            if digits not in seen:
-                seen.add(digits)
-                prefixes.append(digits)
-    prefixes.sort(key=len, reverse=True)
+            key = digits[:prefix_len]
+            if key not in seen:
+                seen.add(key)
+                prefixes.append(key)
     return prefixes
