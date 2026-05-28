@@ -17,6 +17,9 @@ class IpDetector:
         ip_cfg = config.get("ip", {})
         self.enabled = ip_cfg.get("enabled", True)
         self.whitelist = {item.strip() for item in ip_cfg.get("whitelist", [])}
+        self.context_radius = int(
+            config.get("regcon", {}).get("context_radius", 30)
+        )
 
     def _allowed(self, ip_text: str) -> bool:
         if ip_text in self.whitelist:
@@ -34,8 +37,9 @@ class IpDetector:
         line: str,
         file_path: str,
         line_no: int,
-        context_len: int = 40,
+        context_len: int = 30,
     ) -> Iterator[Finding]:
+        del context_len
         if not self.enabled:
             return
         seen: set[tuple[int, int]] = set()
@@ -48,13 +52,14 @@ class IpDetector:
                 if not self._allowed(text):
                     continue
                 seen.add(span)
-                start = max(0, match.start() - context_len)
-                end = min(len(line), match.end() + context_len)
                 yield Finding.create(
                     file_path=file_path,
                     line_no=line_no,
                     column=match.start(),
                     match_type="IP",
                     matched_text=text,
-                    context=line[start:end].strip(),
+                    line=line,
+                    match_start=match.start(),
+                    match_end=match.end(),
+                    context_radius=self.context_radius,
                 )

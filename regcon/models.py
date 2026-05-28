@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 import uuid
+
+from regcon.util.context import split_context
 
 
 @dataclass
@@ -16,6 +18,8 @@ class Finding:
     match_type: str
     matched_text: str
     context: str = ""
+    context_before: str = ""
+    context_after: str = ""
     selected: bool = True
     cell: str = ""
 
@@ -27,9 +31,18 @@ class Finding:
         column: int,
         match_type: str,
         matched_text: str,
+        line: str = "",
+        match_start: int | None = None,
+        match_end: int | None = None,
+        context_radius: int = 30,
         context: str = "",
         cell: str = "",
     ) -> Finding:
+        before, after = "", ""
+        if line and match_start is not None and match_end is not None:
+            before, after = split_context(line, match_start, match_end, context_radius)
+            if not context:
+                context = f"...{before}>>{matched_text}<<{after}..."
         return cls(
             id=str(uuid.uuid4()),
             file_path=file_path,
@@ -38,6 +51,8 @@ class Finding:
             match_type=match_type,
             matched_text=matched_text,
             context=context,
+            context_before=before,
+            context_after=after,
             cell=cell,
         )
 
@@ -50,6 +65,8 @@ class Finding:
             "match_type": self.match_type,
             "matched_text": self.matched_text,
             "context": self.context,
+            "context_before": self.context_before,
+            "context_after": self.context_after,
             "selected": self.selected,
             "cell": self.cell,
         }
@@ -64,6 +81,8 @@ class Finding:
             match_type=data["match_type"],
             matched_text=data["matched_text"],
             context=data.get("context", ""),
+            context_before=data.get("context_before", ""),
+            context_after=data.get("context_after", ""),
             selected=bool(data.get("selected", True)),
             cell=data.get("cell", ""),
         )
