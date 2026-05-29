@@ -7,10 +7,15 @@ from pathlib import Path
 from typing import Any
 
 
-def write_audit(output_dir: Path, config: dict, event: str, details: dict[str, Any]) -> None:
+def write_audit(
+    data_dir: Path,
+    config: dict,
+    event: str,
+    details: dict[str, Any],
+) -> None:
     rc = config.get("regcon", {})
     log_name = rc.get("audit_log", "regcon_actions.log")
-    log_path = output_dir / log_name
+    log_path = data_dir / log_name
     log_path.parent.mkdir(parents=True, exist_ok=True)
     record = {
         "ts": datetime.now(timezone.utc).isoformat(),

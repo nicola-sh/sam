@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,7 @@ from regcon.config.settings import default_config_path, load_config
 from regcon.models import Finding
 from regcon.ui.pan_prefixes_dialog import PanPrefixesDialog
 from regcon.ui.styles import APP_STYLESHEET
+from regcon.util.app_paths import app_data_dir, default_output_dir, pan_prefix_path, ui_log_path
 from regcon.workers.worker import Worker
 
 try:
@@ -87,23 +89,26 @@ class MainWindow(QMainWindow):
         self.findings: list[Finding] = []
         self._displayed_findings: list[Finding] = []
         self.worker: Worker | None = None
-        self._table_limit = int(
+        self._page_size = int(
             self.config.get("regcon", {}).get("max_table_rows", 5000)
         )
+        self._page_index = 0
+        self._app_dir = app_data_dir()
+        self.output_dir = str(default_output_dir())
         self.setAcceptDrops(True)
         self._build_ui()
 
     def _refresh_pan_tooltip(self) -> None:
         n = len(load_prefixes(self.config))
-        tip = "PAN: первые 8 цифр из config.yaml → Luhn"
+        tip = f"PAN: первые 8 цифр → Luhn ({pan_prefix_path()})"
         if n:
-            tip += f" ({n} префиксов, кнопка 8…)"
+            tip += f" — {n} префиксов, кнопка 8…"
         else:
             tip += " — нажмите 8… и добавьте префиксы"
         self.chk_pan.setToolTip(tip)
 
     def _edit_pan_prefixes(self) -> None:
-        dialog = PanPrefixesDialog(self.config, self.config_path, self)
+        dialog = PanPrefixesDialog(self.config, self)
         if dialog.exec():
             self._refresh_pan_tooltip()
 
@@ -177,8 +182,7 @@ class MainWindow(QMainWindow):
         open_btn.setFixedWidth(32)
         open_btn.setToolTip("Открыть папку")
         open_btn.clicked.connect(self._open_output_dir)
-        self.out_label = QLabel(str(Path.home() / "regcon-output"))
-        self.output_dir = str(Path.home() / "regcon-output")
+        self.out_label = QLabel(self.output_dir)
         self.out_label.setToolTip(self.output_dir)
         out_row.addWidget(QLabel("→"))
         out_row.addWidget(self.out_label, stretch=1)
@@ -225,7 +229,19 @@ class MainWindow(QMainWindow):
         self.filter_combo = QComboBox()
         self.filter_combo.addItems(["Все", "PAN", "IP", "PASSWORD"])
         self.filter_combo.setToolTip("Фильтр таблицы")
-        self.filter_combo.currentIndexChanged.connect(self._populate_table)
+        self.filter_combo.currentIndexChanged.connect(self._on_filter_changed)
+        self.page_prev_btn = QPushButton("◀")
+        self.page_prev_btn.setObjectName("secondaryBtn")
+        self.page_prev_btn.setFixedWidth(36)
+        self.page_prev_btn.setToolTip("Предыдущие 5000")
+        self.page_prev_btn.clicked.connect(self._page_prev)
+        self.page_next_btn = QPushButton("▶")
+        self.page_next_btn.setObjectName("secondaryBtn")
+        self.page_next_btn.setFixedWidth(36)
+        self.page_next_btn.setToolTip("Следующие 5000")
+        self.page_next_btn.clicked.connect(self._page_next)
+        self.page_label = QLabel("—")
+        self.page_label.setToolTip("Страница результатов")
         self.select_all_btn = QPushButton("✓")
         self.select_all_btn.setObjectName("secondaryBtn")
         self.select_all_btn.setFixedWidth(36)
@@ -242,6 +258,9 @@ class MainWindow(QMainWindow):
         row1.addStretch()
         row1.addWidget(QLabel("Фильтр:"))
         row1.addWidget(self.filter_combo)
+        row1.addWidget(self.page_prev_btn)
+        row1.addWidget(self.page_label)
+        row1.addWidget(self.page_next_btn)
         row1.addWidget(self.select_all_btn)
         row1.addWidget(self.deselect_all_btn)
         row1.addWidget(self.findings_count_label)
@@ -301,6 +320,41 @@ class MainWindow(QMainWindow):
             return None
         return text
 
+    def _on_filter_changed(self) -> None:
+        self._page_index = 0
+        self._populate_table()
+
+    def _total_pages(self, count: int) -> int:
+        if count <= 0:
+            return 1
+        return (count + self._page_size - 1) // self._page_size
+
+    def _page_prev(self) -> None:
+        if self._page_index > 0:
+            self._sync_table_to_findings()
+            self._page_index -= 1
+            self._populate_table()
+
+    def _page_next(self) -> None:
+        total = len(self._filtered_sorted_findings())
+        if self._page_index < self._total_pages(total) - 1:
+            self._sync_table_to_findings()
+            self._page_index += 1
+            self._populate_table()
+
+    def _update_page_controls(self, total_items: int) -> None:
+        pages = self._total_pages(total_items)
+        if self._page_index >= pages:
+            self._page_index = max(0, pages - 1)
+        page_num = self._page_index + 1 if total_items else 0
+        self.page_label.setText(
+            f"{page_num}/{pages}" if total_items else "—"
+        )
+        self.page_prev_btn.setEnabled(total_items > 0 and self._page_index > 0)
+        self.page_next_btn.setEnabled(
+            total_items > 0 and self._page_index < pages - 1
+        )
+
     def _filtered_sorted_findings(self) -> list[Finding]:
         ftype = self._filter_type_key()
         items = list(self.findings)
@@ -357,8 +411,10 @@ class MainWindow(QMainWindow):
         self.files = []
         self.findings = []
         self._displayed_findings = []
+        self._page_index = 0
         self.files_label.setText("Нет файлов")
         self.table.setRowCount(0)
+        self._update_page_controls(0)
         self._update_findings_label()
         self._update_csv_label()
 
@@ -381,6 +437,14 @@ class MainWindow(QMainWindow):
 
     def _append_log(self, message: str) -> None:
         self.log_view.append(message)
+        try:
+            stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            path = ui_log_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write(f"{stamp} {message}\n")
+        except OSError:
+            pass
 
     def _format_status_progress(self, percent: int, message: str) -> None:
         self.progress.setValue(percent)
@@ -389,8 +453,16 @@ class MainWindow(QMainWindow):
     def _update_findings_label(self) -> None:
         n = len(self.findings)
         sel = sum(1 for f in self.findings if f.selected)
+        filtered = len(self._filtered_sorted_findings())
         shown = len(self._displayed_findings)
-        extra = f" / {shown}" if shown < n else ""
+        if filtered > self._page_size:
+            start = self._page_index * self._page_size + 1
+            end = min(start + shown - 1, filtered)
+            extra = f" · {start}–{end}/{filtered}"
+        elif shown < n:
+            extra = f" / {shown}"
+        else:
+            extra = ""
         self.findings_count_label.setText(f"{sel}/{n}{extra}")
         self.btn_save_masked.setEnabled(n > 0 and not self.stop_btn.isEnabled())
 
@@ -424,6 +496,7 @@ class MainWindow(QMainWindow):
             mode=kwargs["mode"],
             config=self.config,
             output_dir=self.output_dir,
+            data_dir=str(self._app_dir),
             findings=kwargs.get("findings"),
             job_options=kwargs.get("job_options"),
         )
@@ -445,7 +518,7 @@ class MainWindow(QMainWindow):
                 "RegCon",
                 "Справочник PAN пуст.\n\n"
                 "Нажмите кнопку «8…» и добавьте первые 8 цифр номеров "
-                "(по одной строке). Список сохранится в config.yaml.",
+                f"(по одной строке). Список сохранится в {pan_prefix_path()}.",
             )
             return
         self._start_worker(mode="scan")
@@ -487,18 +560,17 @@ class MainWindow(QMainWindow):
 
     def _on_scan_done(self, payload: list[dict[str, Any]]) -> None:
         self.findings = [Finding.from_dict(item) for item in payload]
+        self._page_index = 0
         self._populate_table()
         self._update_findings_label()
         self.tabs.setCurrentIndex(0)
 
     def _populate_table(self) -> None:
         all_filtered = self._filtered_sorted_findings()
-        if len(all_filtered) > self._table_limit:
-            self._append_log(
-                f"Таблица: {self._table_limit} из {len(all_filtered)} "
-                f"({self.filter_combo.currentText()})."
-            )
-        self._displayed_findings = all_filtered[: self._table_limit]
+        self._update_page_controls(len(all_filtered))
+        start = self._page_index * self._page_size
+        end = start + self._page_size
+        self._displayed_findings = all_filtered[start:end]
         self.table.setUpdatesEnabled(False)
         self.table.blockSignals(True)
         self.table.setRowCount(len(self._displayed_findings))

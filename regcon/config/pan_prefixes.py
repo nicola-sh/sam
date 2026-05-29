@@ -1,55 +1,33 @@
 from __future__ import annotations
 
-from pathlib import Path
+from regcon.util.pan_prefix_store import load_prefixes as load_stored_prefixes
+from regcon.util.pan_prefix_store import save_prefixes as save_stored_prefixes
+from regcon.util.pan_prefix_text import (
+    DEFAULT_PREFIX_LEN,
+    load_prefixes_from_file,
+    load_prefixes_from_text,
+    normalize_prefix,
+    prefixes_to_text,
+)
 
-DEFAULT_PREFIX_LEN = 8
-
-
-def normalize_prefix(value: str, prefix_len: int = DEFAULT_PREFIX_LEN) -> str | None:
-    digits = "".join(ch for ch in str(value) if ch.isdigit())
-    if len(digits) < prefix_len:
-        return None
-    return digits[:prefix_len]
-
-
-def load_prefixes_from_text(
-    text: str, prefix_len: int = DEFAULT_PREFIX_LEN
-) -> list[str]:
-    seen: set[str] = set()
-    result: list[str] = []
-    for raw in text.splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        key = normalize_prefix(line, prefix_len)
-        if key and key not in seen:
-            seen.add(key)
-            result.append(key)
-    return result
-
-
-def load_prefixes_from_file(
-    path: Path, prefix_len: int = DEFAULT_PREFIX_LEN
-) -> list[str]:
-    if not path.is_file():
-        return []
-    text = path.read_text(encoding="utf-8-sig", errors="replace")
-    return load_prefixes_from_text(text, prefix_len)
+__all__ = [
+    "DEFAULT_PREFIX_LEN",
+    "load_prefixes",
+    "load_prefixes_from_file",
+    "load_prefixes_from_text",
+    "normalize_prefix",
+    "prefixes_to_text",
+    "save_prefixes",
+]
 
 
 def load_prefixes(config: dict) -> list[str]:
-    """Список префиксов из config.yaml (pan.prefix_list)."""
-    pan_cfg = config.get("pan", {})
-    prefix_len = int(pan_cfg.get("prefix_digits", DEFAULT_PREFIX_LEN))
-    seen: set[str] = set()
-    result: list[str] = []
-    for item in pan_cfg.get("prefix_list", []):
-        key = normalize_prefix(str(item), prefix_len)
-        if key and key not in seen:
-            seen.add(key)
-            result.append(key)
-    return result
+    """Список префиксов из зашифрованного pan_prefix.yaml рядом с exe."""
+    del config
+    return load_stored_prefixes()
 
 
-def prefixes_to_text(prefixes: list[str]) -> str:
-    return "\n".join(prefixes)
+def save_prefixes(config: dict, prefixes: list[str]) -> None:
+    prefix_len = int(config.get("pan", {}).get("prefix_digits", DEFAULT_PREFIX_LEN))
+    save_stored_prefixes(prefixes, prefix_len)
+    config.setdefault("pan", {})["prefix_list"] = prefixes

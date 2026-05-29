@@ -7,9 +7,10 @@ regcon:
   progress_heartbeat_sec: 5
   progress_batch_bytes: 65536
   read_buffer_bytes: 1048576
-  max_table_rows: 5000
+  max_table_rows: 5000  # размер страницы таблицы (◀ ▶)
   context_radius: 30
 
+# Префиксы PAN — зашифрованный pan_prefix.yaml рядом с exe (редактор: кнопка 8…)
 pan:
   enabled: true
   use_luhn: true
@@ -17,8 +18,6 @@ pan:
   mask_keep_last: 4
   prefix_digits: 8
   prefix_line_filter: true
-  prefix_list:
-    - "91123912"
   context_radius: 30
 
 ip:

@@ -3,7 +3,8 @@ from __future__ import annotations
 import re
 from typing import Iterator
 
-from regcon.config.pan_prefixes import DEFAULT_PREFIX_LEN, load_prefixes
+from regcon.config.pan_prefixes import DEFAULT_PREFIX_LEN
+from regcon.util.pan_prefix_store import load_prefixes as load_stored_prefixes
 from regcon.util.pan_luhn import luhn_valid_digits
 from regcon.models import Finding
 from regcon.util.pan_prefix_index import PanPrefixIndex
@@ -118,7 +119,9 @@ class PanDetector:
         self.use_luhn = pan_cfg.get("use_luhn", True)
         self.context_radius = int(pan_cfg.get("context_radius", 30))
         self._prefix_len = int(pan_cfg.get("prefix_digits", DEFAULT_PREFIX_LEN))
-        self._prefix_index = PanPrefixIndex(load_prefixes(config), self._prefix_len)
+        self._prefix_index = PanPrefixIndex(
+            load_stored_prefixes(self._prefix_len), self._prefix_len
+        )
         self._prefix_line_filter = bool(pan_cfg.get("prefix_line_filter", True))
 
     @property
