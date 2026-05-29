@@ -32,6 +32,7 @@ class Worker(QThread):
         mode: str,
         config: dict[str, Any],
         output_dir: str,
+        data_dir: str,
         findings: list[dict[str, Any]] | None = None,
         job_options: dict[str, Any] | None = None,
         parent=None,
@@ -41,6 +42,7 @@ class Worker(QThread):
         self.mode = mode
         self.config = config
         self.output_dir = Path(output_dir)
+        self.data_dir = Path(data_dir)
         self.findings = [Finding.from_dict(item) for item in (findings or [])]
         self.job_options = job_options or {}
         rc = config.get("regcon", {})
@@ -104,7 +106,7 @@ class Worker(QThread):
             all_findings.extend(found)
             self.log.emit(f"  +{len(found)}")
         write_audit(
-            self.output_dir,
+            self.data_dir,
             self.config,
             "scan",
             {"files": [str(p) for p in self.files], "count": len(all_findings)},
@@ -134,7 +136,7 @@ class Worker(QThread):
                 progress=progress,
             )
         write_audit(
-            self.output_dir,
+            self.data_dir,
             self.config,
             "mask",
             {"files": [str(p) for p in paths], "replacements": len(selected)},
@@ -192,7 +194,7 @@ class Worker(QThread):
             progress.add_bytes(max(path.stat().st_size // 4, 1))
 
         write_audit(
-            self.output_dir,
+            self.data_dir,
             self.config,
             "csv2xlsx",
             {"files": [str(p) for p in csv_files]},

@@ -26,7 +26,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "mask_keep_last": 4,
         "prefix_digits": 8,
         "prefix_line_filter": True,
-        "prefix_list": [],
         "context_radius": 30,
     },
     "ip": {
@@ -75,29 +74,7 @@ def load_config(path: Path | None = None) -> dict[str, Any]:
         with path.open(encoding="utf-8") as fh:
             loaded = yaml.safe_load(fh) or {}
         cfg = _deep_merge(cfg, loaded)
-    _migrate_prefix_file(cfg, path.parent)
     return cfg
-
-
-def _migrate_prefix_file(cfg: dict[str, Any], base_dir: Path) -> None:
-    """Один раз: импорт pan_prefixes.txt → prefix_list, если список пуст."""
-    pan = cfg.setdefault("pan", {})
-    if pan.get("prefix_list"):
-        return
-    legacy = pan.pop("prefix_file", None)
-    if not legacy:
-        legacy_path = base_dir / "config" / "pan_prefixes.txt"
-    else:
-        legacy_path = Path(legacy)
-        if not legacy_path.is_absolute():
-            legacy_path = base_dir / legacy_path
-    if legacy_path.is_file():
-        from regcon.config.pan_prefixes import load_prefixes_from_file
-
-        imported = load_prefixes_from_file(legacy_path)
-        if imported:
-            pan["prefix_list"] = imported
-            save_config(cfg, path if path.exists() else default_config_path())
 
 
 def save_config(cfg: dict[str, Any], path: Path | None = None) -> None:

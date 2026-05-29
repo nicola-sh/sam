@@ -19,9 +19,6 @@ pan:
   mask_keep_last: 4
   prefix_digits: 8
   prefix_line_filter: true
-  prefix_list:
-    - "91123912"
-    - "41111111"
   context_radius: 30
 
 ip:

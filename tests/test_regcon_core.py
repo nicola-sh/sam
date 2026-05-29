@@ -29,8 +29,13 @@ def test_context_30_chars():
     assert after == "ZZZZ"
 
 
-def test_load_prefixes_from_config():
-    cfg = {"pan": {"prefix_list": ["91123912", "41111111"], "prefix_digits": 8}}
+def test_load_prefixes_from_store(tmp_path, monkeypatch):
+    from regcon.util import pan_prefix_store as store
+
+    path = tmp_path / "pan_prefix.yaml"
+    monkeypatch.setattr(store, "pan_prefix_path", lambda: path)
+    store.save_prefixes(["91123912", "41111111"])
+    cfg = {"pan": {"prefix_digits": 8}}
     items = load_prefixes(cfg)
     assert len(items) == 2
     assert all(len(p) == 8 for p in items)
@@ -51,11 +56,15 @@ def test_prefix_index_tab_separated():
     assert len(hits) == 1
 
 
-def test_prefix_filter_skips_unknown_bin():
+def test_prefix_filter_skips_unknown_bin(tmp_path, monkeypatch):
+    from regcon.util import pan_prefix_store as store
+
+    path = tmp_path / "pan_prefix.yaml"
+    monkeypatch.setattr(store, "pan_prefix_path", lambda: path)
+    store.save_prefixes(["55000000"])
     cfg = {
         "pan": {
             "enabled": True,
-            "prefix_list": ["55000000"],
             "prefix_digits": 8,
             "prefix_line_filter": True,
         }
@@ -65,11 +74,15 @@ def test_prefix_filter_skips_unknown_bin():
     assert list(det.scan_line(line, "f.log", 1)) == []
 
 
-def test_detector_finds_configured_prefix():
+def test_detector_finds_configured_prefix(tmp_path, monkeypatch):
+    from regcon.util import pan_prefix_store as store
+
+    path = tmp_path / "pan_prefix.yaml"
+    monkeypatch.setattr(store, "pan_prefix_path", lambda: path)
+    store.save_prefixes(["41111111"])
     cfg = {
         "pan": {
             "enabled": True,
-            "prefix_list": ["41111111"],
             "prefix_digits": 8,
             "prefix_line_filter": True,
         }

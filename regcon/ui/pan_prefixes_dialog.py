@@ -9,7 +9,8 @@ from regcon.config.pan_prefixes import (
     load_prefixes_from_text,
     prefixes_to_text,
 )
-from regcon.config.settings import save_config
+from regcon.util.app_paths import app_data_dir, pan_prefix_path
+from regcon.util.pan_prefix_store import load_prefixes_as_text, save_prefixes_from_text
 
 try:
     from PyQt6.QtWidgets import (
@@ -36,17 +37,11 @@ except ImportError:  # pragma: no cover
 
 
 class PanPrefixesDialog(QDialog):
-    """Редактор первых 8 цифр PAN — сохраняется в config.yaml."""
+    """Редактор префиксов PAN → зашифрованный pan_prefix.yaml рядом с exe."""
 
-    def __init__(
-        self,
-        config: dict[str, Any],
-        config_path: Path,
-        parent=None,
-    ) -> None:
+    def __init__(self, config: dict[str, Any], parent=None) -> None:
         super().__init__(parent)
         self.config = config
-        self.config_path = config_path
         self.prefix_len = int(
             config.get("pan", {}).get("prefix_digits", DEFAULT_PREFIX_LEN)
         )
@@ -56,15 +51,13 @@ class PanPrefixesDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.addWidget(
             QLabel(
-                f"Первые {self.prefix_len} цифр номера — по одной строке.\n"
-                "Сохраняется в config.yaml (pan.prefix_list)."
+                f"Первые {self.prefix_len} цифр — по строке.\n"
+                f"Файл (шифр.): {pan_prefix_path()}"
             )
         )
 
         self.editor = QTextEdit()
-        pan_cfg = config.setdefault("pan", {})
-        current = pan_cfg.get("prefix_list", [])
-        self.editor.setPlainText(prefixes_to_text([str(p) for p in current]))
+        self.editor.setPlainText(load_prefixes_as_text())
         self.editor.setPlaceholderText("91123912\n41111111")
         layout.addWidget(self.editor)
 
@@ -85,7 +78,10 @@ class PanPrefixesDialog(QDialog):
 
     def _import_txt(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self, "Импорт префиксов", str(Path.home()), "Текст (*.txt)"
+            self,
+            "Импорт префиксов",
+            str(app_data_dir()),
+            "Текст (*.txt);;YAML (*.yaml)",
         )
         if not path:
             return
@@ -94,14 +90,11 @@ class PanPrefixesDialog(QDialog):
             self.editor.setPlainText(prefixes_to_text(items))
 
     def _save(self) -> None:
-        items = load_prefixes_from_text(
+        count = save_prefixes_from_text(
             self.editor.toPlainText(), self.prefix_len
         )
-        self.config.setdefault("pan", {})["prefix_list"] = items
-        save_config(self.config, self.config_path)
-        self.accept()
-
-    def prefix_count(self) -> int:
-        return len(
-            load_prefixes_from_text(self.editor.toPlainText(), self.prefix_len)
+        self.config.setdefault("pan", {})["prefix_list"] = load_prefixes_from_text(
+            self.editor.toPlainText(), self.prefix_len
         )
+        del count
+        self.accept()
