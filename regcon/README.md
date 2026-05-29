@@ -241,6 +241,7 @@ regcon/
 | Аудит | Лог действий в `regcon_actions.log`: кто запустил (Windows user), файлы, сколько замен, время |
 | Офлайн | Только библиотеки из [`docs/AVAILABLE_LIBRARIES.md`](../docs/AVAILABLE_LIBRARIES.md): PyQt6, pandas, openpyxl, PyYAML и т.д. |
 | Сборка | PyInstaller: `regcon/build/regcon.spec` → `dist/RegCon.exe` (см. [`docs/REGCON_WINDOWS.md`](../docs/REGCON_WINDOWS.md) — SmartScreen и подпись) |
+| PAN / память | [`docs/REGCON_PRIVACY.md`](../docs/REGCON_PRIVACY.md) — что не пишется на диск, группы в таблице |
 
 ---
 

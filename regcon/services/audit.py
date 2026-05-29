@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from regcon.util.privacy import sanitize_audit_details
+
 
 def write_audit(
     data_dir: Path,
@@ -21,7 +23,7 @@ def write_audit(
         "ts": datetime.now(timezone.utc).isoformat(),
         "user": getpass.getuser(),
         "event": event,
-        **details,
+        **sanitize_audit_details(details),
     }
     with log_path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(record, ensure_ascii=False) + "\n")

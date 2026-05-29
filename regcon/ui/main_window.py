@@ -13,6 +13,12 @@ from regcon.models import Finding
 from regcon.ui.pan_prefixes_dialog import PanPrefixesDialog
 from regcon.ui.styles import APP_STYLESHEET
 from regcon.util.app_paths import app_data_dir, default_output_dir, pan_prefix_path, ui_log_path
+from regcon.util.finding_groups import (
+    FindingGroup,
+    build_finding_groups,
+    flatten_selected,
+)
+from regcon.util.privacy import redact_sensitive_text, wipe_findings
 from regcon.workers.worker import Worker
 
 try:
@@ -87,8 +93,10 @@ class MainWindow(QMainWindow):
         self.config = load_config(self.config_path)
         self.files: list[str] = []
         self.findings: list[Finding] = []
-        self._displayed_findings: list[Finding] = []
+        self._groups: list[FindingGroup] = []
+        self._displayed_groups: list[FindingGroup] = []
         self.worker: Worker | None = None
+        self._purge_after_job = False
         self._page_size = int(
             self.config.get("regcon", {}).get("max_table_rows", 5000)
         )
@@ -272,15 +280,15 @@ class MainWindow(QMainWindow):
         row1.addWidget(self.findings_count_label)
         layout.addLayout(row1)
 
-        self.table = QTableWidget(0, 7)
+        self.table = QTableWidget(0, 8)
         self.table.setHorizontalHeaderLabels(
-            ["✓", "Тип", "Файл", "Стр.", "…30", "Найдено", "30…"]
+            ["✓", "Тип", "Файл", "Стр.", "…30", "Найдено", "шт.", "30…"]
         )
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(2, _STRETCH)
         header.setSectionResizeMode(4, _STRETCH)
         header.setSectionResizeMode(5, _STRETCH)
-        header.setSectionResizeMode(6, _STRETCH)
+        header.setSectionResizeMode(7, _STRETCH)
         self.table.verticalHeader().setVisible(False)
         self.table.cellChanged.connect(self._on_cell_changed)
         layout.addWidget(self.table, stretch=1)
@@ -337,14 +345,14 @@ class MainWindow(QMainWindow):
 
     def _page_prev(self) -> None:
         if self._page_index > 0:
-            self._sync_table_to_findings()
+            self._sync_table_to_groups()
             self._page_index -= 1
             self._populate_table()
 
     def _page_next(self) -> None:
-        total = len(self._filtered_sorted_findings())
+        total = len(self._filtered_sorted_groups())
         if self._page_index < self._total_pages(total) - 1:
-            self._sync_table_to_findings()
+            self._sync_table_to_groups()
             self._page_index += 1
             self._populate_table()
 
@@ -361,20 +369,32 @@ class MainWindow(QMainWindow):
             total_items > 0 and self._page_index < pages - 1
         )
 
-    def _filtered_sorted_findings(self) -> list[Finding]:
+    def _rebuild_groups(self) -> None:
+        self._groups = build_finding_groups(self.findings)
+
+    def _filtered_sorted_groups(self) -> list[FindingGroup]:
         ftype = self._filter_type_key()
-        items = list(self.findings)
+        items = list(self._groups)
         if ftype:
-            items = [f for f in items if f.match_type == ftype]
+            items = [g for g in items if g.head.match_type == ftype]
         items.sort(
-            key=lambda f: (
-                _TYPE_SORT.get(f.match_type, 9),
-                Path(f.file_path).name.lower(),
-                f.line_no,
-                f.column,
+            key=lambda g: (
+                _TYPE_SORT.get(g.head.match_type, 9),
+                Path(g.head.file_path).name.lower(),
+                g.head.line_no,
+                g.head.column,
             )
         )
         return items
+
+    def _purge_session_findings(self) -> None:
+        wipe_findings(self.findings)
+        self._groups = []
+        self._displayed_groups = []
+        self.table.setRowCount(0)
+        self._update_page_controls(0)
+        self._update_findings_label()
+        self.log_view.clear()
 
     def _csv_files(self) -> list[str]:
         return [f for f in self.files if Path(f).suffix.lower() == ".csv"]
@@ -415,8 +435,7 @@ class MainWindow(QMainWindow):
 
     def _clear_files(self) -> None:
         self.files = []
-        self.findings = []
-        self._displayed_findings = []
+        self._purge_session_findings()
         self._page_index = 0
         self.files_label.setText("Нет файлов")
         self.table.setRowCount(0)
@@ -443,24 +462,16 @@ class MainWindow(QMainWindow):
             subprocess.run(["xdg-open", str(path)], check=False)
 
     def _append_log(self, message: str) -> None:
-        self.log_view.append(message)
+        safe = redact_sensitive_text(message)
+        self.log_view.append(safe)
         try:
             stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             path = ui_log_path()
             path.parent.mkdir(parents=True, exist_ok=True)
-            line = message
-            if self.config.get("regcon", {}).get("mask_sensitive_ui_log"):
-                line = self._redact_log_line(message)
             with path.open("a", encoding="utf-8") as fh:
-                fh.write(f"{stamp} {line}\n")
+                fh.write(f"{stamp} {safe}\n")
         except OSError:
             pass
-
-    @staticmethod
-    def _redact_log_line(message: str) -> str:
-        import re
-
-        return re.sub(r"\d{13,19}", lambda m: m.group(0)[:6] + "*" * 6, message)
 
     def _format_status_progress(self, percent: int, message: str) -> None:
         self.progress.setValue(percent)
@@ -469,16 +480,15 @@ class MainWindow(QMainWindow):
     def _update_findings_label(self) -> None:
         n = len(self.findings)
         sel = sum(1 for f in self.findings if f.selected)
-        filtered = len(self._filtered_sorted_findings())
-        shown = len(self._displayed_findings)
+        groups_n = len(self._groups)
+        filtered = len(self._filtered_sorted_groups())
+        shown = len(self._displayed_groups)
         if filtered > self._page_size:
             start = self._page_index * self._page_size + 1
             end = min(start + shown - 1, filtered)
-            extra = f" · {start}–{end}/{filtered}"
-        elif shown < n:
-            extra = f" / {shown}"
+            extra = f" · гр. {start}–{end}/{filtered}"
         else:
-            extra = ""
+            extra = f" · {groups_n} гр." if groups_n else ""
         self.findings_count_label.setText(f"{sel}/{n}{extra}")
         self.btn_save_masked.setEnabled(n > 0 and not self.stop_btn.isEnabled())
 
@@ -514,6 +524,7 @@ class MainWindow(QMainWindow):
         if self.worker and self.worker.isRunning():
             self.worker.requestInterruption()
             self.worker.wait(30_000)
+        self._purge_session_findings()
         super().closeEvent(event)
 
     def _start_worker(self, **kwargs: Any) -> None:
@@ -559,14 +570,18 @@ class MainWindow(QMainWindow):
         if not self.findings:
             QMessageBox.warning(self, "RegCon", "Сначала «Найти».")
             return
-        self._sync_table_to_findings()
-        if not any(f.selected for f in self.findings):
+        self._sync_table_to_groups()
+        if not any(g.selected for g in self._groups):
             QMessageBox.warning(self, "RegCon", "Отметьте совпадения.")
             return
         self._sync_config_flags()
+        self._purge_after_job = bool(
+            self.config.get("regcon", {}).get("purge_findings_after_mask", True)
+        )
+        selected = flatten_selected(self._groups)
         self._start_worker(
             mode="mask",
-            findings=[f.to_dict() for f in self.findings],
+            findings=[f.to_dict() for f in selected],
         )
 
     def _on_create_excel(self) -> None:
@@ -586,10 +601,15 @@ class MainWindow(QMainWindow):
             return
         use_existing = mask_before and bool(self.findings)
         if use_existing:
-            self._sync_table_to_findings()
-            if not any(f.selected for f in self.findings):
+            self._sync_table_to_groups()
+            if not any(g.selected for g in self._groups):
                 QMessageBox.warning(self, "RegCon", "Отметьте совпадения для маски.")
                 return
+        if mask_before and use_existing:
+            self._purge_after_job = bool(
+                self.config.get("regcon", {}).get("purge_findings_after_mask", True)
+            )
+        selected = flatten_selected(self._groups) if use_existing else []
         self._start_worker(
             mode="csv2xlsx",
             files=csv_list,
@@ -598,11 +618,13 @@ class MainWindow(QMainWindow):
                 "format_json_cells": self.chk_excel_json.isChecked(),
                 "use_existing_findings": use_existing,
             },
-            findings=[f.to_dict() for f in self.findings] if use_existing else None,
+            findings=[f.to_dict() for f in selected] if use_existing else None,
         )
 
     def _on_scan_done(self, payload: list[dict[str, Any]]) -> None:
+        wipe_findings(self.findings)
         self.findings = [Finding.from_dict(item) for item in payload]
+        self._rebuild_groups()
         self._page_index = 0
         self._populate_table()
         self._update_findings_label()
@@ -617,53 +639,63 @@ class MainWindow(QMainWindow):
         )
 
     def _populate_table(self) -> None:
-        all_filtered = self._filtered_sorted_findings()
+        all_filtered = self._filtered_sorted_groups()
         self._update_page_controls(len(all_filtered))
         start = self._page_index * self._page_size
         end = start + self._page_size
-        self._displayed_findings = all_filtered[start:end]
+        self._displayed_groups = all_filtered[start:end]
         self.table.setUpdatesEnabled(False)
         self.table.blockSignals(True)
-        self.table.setRowCount(len(self._displayed_findings))
-        for row, finding in enumerate(self._displayed_findings):
+        self.table.setRowCount(len(self._displayed_groups))
+        for row, group in enumerate(self._displayed_groups):
+            finding = group.head
             check = QTableWidgetItem()
             check.setFlags(_USER_CHECKABLE | _ENABLED)
-            check.setCheckState(_CHECKED if finding.selected else _UNCHECKED)
+            check.setCheckState(_CHECKED if group.selected else _UNCHECKED)
             self.table.setItem(row, 0, check)
             self.table.setItem(row, 1, QTableWidgetItem(finding.match_type))
             self.table.setItem(row, 2, QTableWidgetItem(Path(finding.file_path).name))
             loc = str(finding.line_no)
             if finding.cell:
                 loc = f"{finding.line_no}:{finding.cell}"
+            if group.count > 1:
+                loc = f"{loc}…+{group.count - 1}"
             self.table.setItem(row, 3, QTableWidgetItem(loc))
             before = finding.context_before.replace("\n", " ").replace("\r", "")
             after = finding.context_after.replace("\n", " ").replace("\r", "")
             self.table.setItem(row, 4, QTableWidgetItem(before))
-            self.table.setItem(row, 5, QTableWidgetItem(finding.matched_text))
-            self.table.setItem(row, 6, QTableWidgetItem(after))
+            shown = finding.matched_text
+            if group.count > 1:
+                shown = f"{shown} …"
+            self.table.setItem(row, 5, QTableWidgetItem(shown))
+            self.table.setItem(row, 6, QTableWidgetItem(str(group.count)))
+            self.table.setItem(row, 7, QTableWidgetItem(after))
         self.table.blockSignals(False)
         self.table.setUpdatesEnabled(True)
         self._update_findings_label()
 
     def _on_cell_changed(self, row: int, column: int) -> None:
-        if column != 0 or row >= len(self._displayed_findings):
+        if column != 0 or row >= len(self._displayed_groups):
             return
         item = self.table.item(row, 0)
         if item is None:
             return
-        self._displayed_findings[row].selected = item.checkState() == _CHECKED
+        self._displayed_groups[row].selected = item.checkState() == _CHECKED
+        self._displayed_groups[row].sync_selection_to_items()
         self._update_findings_label()
 
-    def _sync_table_to_findings(self) -> None:
-        for row in range(min(self.table.rowCount(), len(self._displayed_findings))):
+    def _sync_table_to_groups(self) -> None:
+        for row in range(min(self.table.rowCount(), len(self._displayed_groups))):
             item = self.table.item(row, 0)
             if item:
-                self._displayed_findings[row].selected = item.checkState() == _CHECKED
+                self._displayed_groups[row].selected = item.checkState() == _CHECKED
+                self._displayed_groups[row].sync_selection_to_items()
 
     def _set_all_findings(self, selected: bool) -> None:
         state = _CHECKED if selected else _UNCHECKED
-        for finding in self._displayed_findings:
-            finding.selected = selected
+        for group in self._displayed_groups:
+            group.selected = selected
+            group.sync_selection_to_items()
         self.table.blockSignals(True)
         for row in range(self.table.rowCount()):
             item = self.table.item(row, 0)
@@ -687,6 +719,10 @@ class MainWindow(QMainWindow):
         if self.progress.value() < 100:
             self.progress.setValue(100)
         self.progress_label.setText("готово")
+        if self._purge_after_job:
+            self._purge_session_findings()
+            self._purge_after_job = False
+            self._append_log("Данные карт удалены из памяти приложения.")
 
 
 def run_app() -> None:

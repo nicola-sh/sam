@@ -13,7 +13,7 @@ regcon:
   max_findings: 200000
   context_radius: 30
   last_output_dir: ""
-  mask_sensitive_ui_log: false
+  purge_findings_after_mask: true
 
 pan:
   enabled: true

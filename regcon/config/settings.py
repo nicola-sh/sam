@@ -22,7 +22,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "max_findings": 200000,
         "context_radius": 30,
         "last_output_dir": "",
-        "mask_sensitive_ui_log": False,
+        "purge_findings_after_mask": True,
     },
     "pan": {
         "enabled": True,
