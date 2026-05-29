@@ -10,7 +10,10 @@ regcon:
   progress_batch_bytes: 65536
   read_buffer_bytes: 1048576
   max_table_rows: 5000
+  max_findings: 200000
   context_radius: 30
+  last_output_dir: ""
+  mask_sensitive_ui_log: false
 
 pan:
   enabled: true

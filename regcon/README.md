@@ -240,7 +240,7 @@ regcon/
 | Безопасность | Исходные файлы не изменять; вывод только в отдельную папку |
 | Аудит | Лог действий в `regcon_actions.log`: кто запустил (Windows user), файлы, сколько замен, время |
 | Офлайн | Только библиотеки из [`docs/AVAILABLE_LIBRARIES.md`](../docs/AVAILABLE_LIBRARIES.md): PyQt6, pandas, openpyxl, PyYAML и т.д. |
-| Сборка | Опционально PyInstaller → один `.exe` для операторов |
+| Сборка | PyInstaller: `regcon/build/regcon.spec` → `dist/RegCon.exe` (см. [`docs/REGCON_WINDOWS.md`](../docs/REGCON_WINDOWS.md) — SmartScreen и подпись) |
 
 ---
 

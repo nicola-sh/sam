@@ -30,4 +30,3 @@ def load_prefixes(config: dict) -> list[str]:
 def save_prefixes(config: dict, prefixes: list[str]) -> None:
     prefix_len = int(config.get("pan", {}).get("prefix_digits", DEFAULT_PREFIX_LEN))
     save_stored_prefixes(prefixes, prefix_len)
-    config.setdefault("pan", {})["prefix_list"] = prefixes

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from regcon.config.pan_prefixes import load_prefixes
-from regcon.config.settings import default_config_path, load_config
+from regcon.config.settings import default_config_path, load_config, save_config
 from regcon.models import Finding
 from regcon.ui.pan_prefixes_dialog import PanPrefixesDialog
 from regcon.ui.styles import APP_STYLESHEET
@@ -94,9 +94,15 @@ class MainWindow(QMainWindow):
         )
         self._page_index = 0
         self._app_dir = app_data_dir()
-        self.output_dir = str(default_output_dir())
+        rc = self.config.get("regcon", {})
+        last_out = str(rc.get("last_output_dir") or "").strip()
+        if last_out and Path(last_out).is_dir():
+            self.output_dir = last_out
+        else:
+            self.output_dir = str(default_output_dir())
         self.setAcceptDrops(True)
         self._build_ui()
+        self._append_log(f"Данные: {self._app_dir}")
 
     def _refresh_pan_tooltip(self) -> None:
         n = len(load_prefixes(self.config))
@@ -233,12 +239,12 @@ class MainWindow(QMainWindow):
         self.page_prev_btn = QPushButton("◀")
         self.page_prev_btn.setObjectName("secondaryBtn")
         self.page_prev_btn.setFixedWidth(36)
-        self.page_prev_btn.setToolTip("Предыдущие 5000")
+        self.page_prev_btn.setToolTip(f"Предыдущие {self._page_size}")
         self.page_prev_btn.clicked.connect(self._page_prev)
         self.page_next_btn = QPushButton("▶")
         self.page_next_btn.setObjectName("secondaryBtn")
         self.page_next_btn.setFixedWidth(36)
-        self.page_next_btn.setToolTip("Следующие 5000")
+        self.page_next_btn.setToolTip(f"Следующие {self._page_size}")
         self.page_next_btn.clicked.connect(self._page_next)
         self.page_label = QLabel("—")
         self.page_label.setToolTip("Страница результатов")
@@ -293,7 +299,7 @@ class MainWindow(QMainWindow):
         )
         self.chk_excel_mask = QCheckBox("Сначала обезличить")
         self.chk_excel_mask.setToolTip(
-            "Маскирование перед Excel; иначе — только отмеченные с вкладки «Обезличивание»"
+            "Только после «Найти» и отметки совпадений на вкладке «Обезличивание»"
         )
         opts.addWidget(self.chk_excel_json)
         opts.addWidget(self.chk_excel_mask)
@@ -424,6 +430,7 @@ class MainWindow(QMainWindow):
             self.output_dir = path
             self.out_label.setText(path)
             self.out_label.setToolTip(path)
+            self._persist_settings()
 
     def _open_output_dir(self) -> None:
         path = Path(self.output_dir)
@@ -441,10 +448,19 @@ class MainWindow(QMainWindow):
             stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             path = ui_log_path()
             path.parent.mkdir(parents=True, exist_ok=True)
+            line = message
+            if self.config.get("regcon", {}).get("mask_sensitive_ui_log"):
+                line = self._redact_log_line(message)
             with path.open("a", encoding="utf-8") as fh:
-                fh.write(f"{stamp} {message}\n")
+                fh.write(f"{stamp} {line}\n")
         except OSError:
             pass
+
+    @staticmethod
+    def _redact_log_line(message: str) -> str:
+        import re
+
+        return re.sub(r"\d{13,19}", lambda m: m.group(0)[:6] + "*" * 6, message)
 
     def _format_status_progress(self, percent: int, message: str) -> None:
         self.progress.setValue(percent)
@@ -485,9 +501,25 @@ class MainWindow(QMainWindow):
         worker.error.connect(self._on_worker_error)
         worker.cancelled.connect(self._on_worker_cancelled)
         worker.scan_done.connect(self._on_scan_done)
+        worker.scan_truncated.connect(self._on_scan_truncated)
         worker.finished_ok.connect(self._on_worker_finished)
 
+    def _persist_settings(self) -> None:
+        self._sync_config_flags()
+        self.config.setdefault("regcon", {})["last_output_dir"] = self.output_dir
+        save_config(self.config, self.config_path)
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        self._persist_settings()
+        if self.worker and self.worker.isRunning():
+            self.worker.requestInterruption()
+            self.worker.wait(30_000)
+        super().closeEvent(event)
+
     def _start_worker(self, **kwargs: Any) -> None:
+        if self.worker and self.worker.isRunning():
+            self.worker.requestInterruption()
+            self.worker.wait(30_000)
         self.progress.setValue(0)
         self.progress_label.setText("0% · …")
         self._set_busy(True)
@@ -544,9 +576,20 @@ class MainWindow(QMainWindow):
             return
         self._sync_config_flags()
         mask_before = self.chk_excel_mask.isChecked()
+        if mask_before and not self.findings:
+            QMessageBox.warning(
+                self,
+                "RegCon",
+                "Для обезличивания перед Excel сначала выполните «Найти» "
+                "на вкладке «Обезличивание», отметьте совпадения и повторите.",
+            )
+            return
         use_existing = mask_before and bool(self.findings)
         if use_existing:
             self._sync_table_to_findings()
+            if not any(f.selected for f in self.findings):
+                QMessageBox.warning(self, "RegCon", "Отметьте совпадения для маски.")
+                return
         self._start_worker(
             mode="csv2xlsx",
             files=csv_list,
@@ -564,6 +607,14 @@ class MainWindow(QMainWindow):
         self._populate_table()
         self._update_findings_label()
         self.tabs.setCurrentIndex(0)
+
+    def _on_scan_truncated(self, count: int, limit: int) -> None:
+        QMessageBox.warning(
+            self,
+            "RegCon",
+            f"Найдено больше лимита. В таблице до {count} записей "
+            f"(лимит {limit}). Уточните фильтры или разбейте файлы.",
+        )
 
     def _populate_table(self) -> None:
         all_filtered = self._filtered_sorted_findings()
@@ -610,11 +661,9 @@ class MainWindow(QMainWindow):
                 self._displayed_findings[row].selected = item.checkState() == _CHECKED
 
     def _set_all_findings(self, selected: bool) -> None:
-        ftype = self._filter_type_key()
         state = _CHECKED if selected else _UNCHECKED
-        for finding in self.findings:
-            if ftype is None or finding.match_type == ftype:
-                finding.selected = selected
+        for finding in self._displayed_findings:
+            finding.selected = selected
         self.table.blockSignals(True)
         for row in range(self.table.rowCount()):
             item = self.table.item(row, 0)

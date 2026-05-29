@@ -82,7 +82,11 @@ def findings_to_replacements(
     replacements: list[tuple[int, int, str]] = []
     for finding in findings:
         start = finding.column
-        end = finding.span_end or start + len(finding.matched_text)
+        end = (
+            finding.span_end
+            if finding.span_end > start
+            else start + len(finding.matched_text)
+        )
         if start < 0 or end > len(line) or start >= end:
             continue
         fragment = line[start:end]
