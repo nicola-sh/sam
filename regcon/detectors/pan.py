@@ -67,8 +67,6 @@ def _overlaps_date_spans(
     for abs_start, abs_end in date_spans:
         if abs_start < end and abs_end > start:
             return True
-        if abs_end == start or abs_start == end:
-            return True
     return False
 
 
@@ -126,6 +124,7 @@ class PanDetector:
             for h in pan_cfg.get("bin_line_hints", [])
             if isinstance(h, str) and h.isdigit()
         )
+        self.prefix_file_path = prefix_path
         self._prefix_index = build_prefix_index(
             prefix_path, extra, self._prefix_len
         )
@@ -134,6 +133,11 @@ class PanDetector:
     @property
     def prefix_count(self) -> int:
         return self._prefix_index.count
+
+    @property
+    def prefix_file_loaded(self) -> bool:
+        path = self.prefix_file_path
+        return path is not None and path.is_file()
 
     def scan_line(
         self,

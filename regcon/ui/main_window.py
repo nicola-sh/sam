@@ -428,6 +428,20 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "RegCon", "Добавьте файлы.")
             return
         self._sync_config_flags()
+        if self.chk_pan.isChecked():
+            ppath = resolve_prefix_path(self.config)
+            pcount = build_prefix_index(ppath, ()).count
+            if pcount == 0:
+                loc = str(ppath) if ppath else "config/pan_prefixes.txt"
+                QMessageBox.warning(
+                    self,
+                    "RegCon",
+                    "Справочник PAN не загружен (0 префиксов).\n\n"
+                    f"Нужен файл:\n{loc}\n\n"
+                    "По одной строке — первые 8 цифр номера. "
+                    "Положите файл рядом с программой или в regcon/config/.",
+                )
+                return
         self._start_worker(mode="scan")
 
     def _on_save_masked(self) -> None:

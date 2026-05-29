@@ -97,8 +97,12 @@ class Worker(QThread):
             progress.start_file(idx, path.name)
             self.log.emit(f"Скан: {path.name}")
             found = scanner.scan_file(path, cancel=self._cancel_check, progress=progress)
-            if scanner._pan.prefix_count:
-                self.log.emit(f"  PAN: префиксов {scanner._pan.prefix_count}")
+            pan = scanner._pan
+            if pan.prefix_count:
+                self.log.emit(f"  PAN: префиксов {pan.prefix_count}")
+            elif pan.enabled:
+                path = pan.prefix_file_path or "config/pan_prefixes.txt"
+                self.log.emit(f"  PAN: префиксы не загружены ({path})")
             all_findings.extend(found)
             self.log.emit(f"  +{len(found)}")
         write_audit(

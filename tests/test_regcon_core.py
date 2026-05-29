@@ -44,6 +44,13 @@ def test_prefix_index_finds_pan_by_eight_and_luhn():
     assert hits[0][2] == "4111111111111111"
 
 
+def test_prefix_index_tab_separated():
+    idx = PanPrefixIndex(["41111111"])
+    line = "41111111\t11111111"
+    hits = idx.iter_pan_candidates(line)
+    assert len(hits) == 1
+
+
 def test_prefix_filter_skips_unknown_bin():
     cfg = {
         "pan": {

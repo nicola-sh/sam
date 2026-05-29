@@ -9,6 +9,11 @@ from regcon.util.pan_luhn import luhn_valid_digits
 _PAN_LENGTHS = (16, 19, 18, 17, 15, 14, 13)
 
 
+def _is_digit_gap(ch: str, has_digits: bool) -> bool:
+    """Пробел, таб, двоеточие и т.п. между цифрами номера."""
+    return has_digits and not ch.isdigit() and not ch.isalpha()
+
+
 class PanPrefixIndex:
     """
     Справочник первых 8 цифр PAN.
@@ -101,7 +106,7 @@ class PanPrefixIndex:
             if ch.isdigit():
                 parts.append(ch)
                 j += 1
-            elif ch in " -" and parts:
+            elif _is_digit_gap(ch, bool(parts)):
                 j += 1
             else:
                 break
@@ -119,7 +124,7 @@ class PanPrefixIndex:
                 digits.append(ch)
                 positions.append(j)
                 j += 1
-            elif ch in " -" and digits:
+            elif _is_digit_gap(ch, bool(digits)):
                 j += 1
             else:
                 break
