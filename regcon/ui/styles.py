@@ -98,10 +98,15 @@ QTextEdit#logView {
     font-family: Consolas, monospace;
     font-size: 12px;
 }
-QLabel#progressLabel {
-    font-weight: 600;
-    color: #2563eb;
-    min-width: 140px;
+QLabel#previewLabel {
+    background: #eff6ff;
+    border: 1px solid #bfdbfe;
+    border-radius: 4px;
+    padding: 6px 8px;
+    color: #1e3a5f;
     font-size: 11px;
+}
+QTableWidget::item {
+    padding: 2px 4px;
 }
 """
