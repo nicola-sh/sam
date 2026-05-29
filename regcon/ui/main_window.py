@@ -6,10 +6,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from regcon.config.pan_prefixes import resolve_prefix_path
-from regcon.config.settings import load_config
+from regcon.config.pan_prefixes import load_prefixes
+from regcon.config.settings import default_config_path, load_config
 from regcon.models import Finding
-from regcon.util.pan_prefix_index import build_prefix_index
+from regcon.ui.pan_prefixes_dialog import PanPrefixesDialog
 from regcon.ui.styles import APP_STYLESHEET
 from regcon.workers.worker import Worker
 
@@ -81,8 +81,8 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("RegCon")
         self.resize(1024, 620)
-        config_path = Path(__file__).resolve().parent.parent / "config.yaml"
-        self.config = load_config(config_path)
+        self.config_path = default_config_path()
+        self.config = load_config(self.config_path)
         self.files: list[str] = []
         self.findings: list[Finding] = []
         self._displayed_findings: list[Finding] = []
@@ -92,6 +92,20 @@ class MainWindow(QMainWindow):
         )
         self.setAcceptDrops(True)
         self._build_ui()
+
+    def _refresh_pan_tooltip(self) -> None:
+        n = len(load_prefixes(self.config))
+        tip = "PAN: первые 8 цифр из config.yaml → Luhn"
+        if n:
+            tip += f" ({n} префиксов, кнопка 8…)"
+        else:
+            tip += " — нажмите 8… и добавьте префиксы"
+        self.chk_pan.setToolTip(tip)
+
+    def _edit_pan_prefixes(self) -> None:
+        dialog = PanPrefixesDialog(self.config, self.config_path, self)
+        if dialog.exec():
+            self._refresh_pan_tooltip()
 
     def _hline(self) -> QFrame:
         line = QFrame()
@@ -125,16 +139,12 @@ class MainWindow(QMainWindow):
         pwd_cfg = self.config.get("passwords", {})
         self.chk_pan = QCheckBox("PAN")
         self.chk_pan.setChecked(pan_cfg.get("enabled", True))
-        prefix_path = resolve_prefix_path(self.config)
-        prefix_n = build_prefix_index(
-            prefix_path, ()
-        ).count
-        pan_tip = "PAN: первые 8 цифр из справочника → Luhn"
-        if prefix_n:
-            pan_tip += f" ({prefix_n} шт., {prefix_path.name})"
-        else:
-            pan_tip += " — заполните config/pan_prefixes.txt"
-        self.chk_pan.setToolTip(pan_tip)
+        self._refresh_pan_tooltip()
+        pan_btn = QPushButton("8…")
+        pan_btn.setObjectName("secondaryBtn")
+        pan_btn.setFixedWidth(36)
+        pan_btn.setToolTip("Справочник первых 8 цифр PAN")
+        pan_btn.clicked.connect(self._edit_pan_prefixes)
         self.chk_ip = QCheckBox("IP")
         self.chk_ip.setChecked(ip_cfg.get("enabled", True))
         self.chk_pwd = QCheckBox("Пароли")
@@ -143,6 +153,7 @@ class MainWindow(QMainWindow):
         top.addWidget(clear_btn)
         top.addWidget(self.files_label, stretch=1)
         top.addWidget(self.chk_pan)
+        top.addWidget(pan_btn)
         top.addWidget(self.chk_ip)
         top.addWidget(self.chk_pwd)
         root.addLayout(top)
@@ -428,6 +439,15 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "RegCon", "Добавьте файлы.")
             return
         self._sync_config_flags()
+        if self.chk_pan.isChecked() and len(load_prefixes(self.config)) == 0:
+            QMessageBox.warning(
+                self,
+                "RegCon",
+                "Справочник PAN пуст.\n\n"
+                "Нажмите кнопку «8…» и добавьте первые 8 цифр номеров "
+                "(по одной строке). Список сохранится в config.yaml.",
+            )
+            return
         self._start_worker(mode="scan")
 
     def _on_save_masked(self) -> None:

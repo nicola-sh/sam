@@ -99,6 +99,8 @@ class Worker(QThread):
             found = scanner.scan_file(path, cancel=self._cancel_check, progress=progress)
             if scanner._pan.prefix_count:
                 self.log.emit(f"  PAN: префиксов {scanner._pan.prefix_count}")
+            elif scanner._pan.enabled:
+                self.log.emit("  PAN: справочник пуст (кнопка 8… в окне)")
             all_findings.extend(found)
             self.log.emit(f"  +{len(found)}")
         write_audit(

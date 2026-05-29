@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from regcon.config.pan_prefixes import load_prefix_lines
+from regcon.config.pan_prefixes import load_prefixes, load_prefixes_from_text
 from regcon.detectors.pan import PanDetector, is_plausible_pan, luhn_valid
 from regcon.maskers.masker import apply_replacements, findings_to_replacements, mask_pan_text
 from regcon.models import Finding
@@ -29,10 +29,10 @@ def test_context_30_chars():
     assert after == "ZZZZ"
 
 
-def test_load_prefixes_eight_digits():
-    path = Path(__file__).resolve().parent.parent / "regcon/config/pan_prefixes.txt"
-    items = load_prefix_lines(path, 8)
-    assert items
+def test_load_prefixes_from_config():
+    cfg = {"pan": {"prefix_list": ["91123912", "41111111"], "prefix_digits": 8}}
+    items = load_prefixes(cfg)
+    assert len(items) == 2
     assert all(len(p) == 8 for p in items)
 
 
@@ -44,14 +44,20 @@ def test_prefix_index_finds_pan_by_eight_and_luhn():
     assert hits[0][2] == "4111111111111111"
 
 
+def test_prefix_index_tab_separated():
+    idx = PanPrefixIndex(["41111111"])
+    line = "41111111\t11111111"
+    hits = idx.iter_pan_candidates(line)
+    assert len(hits) == 1
+
+
 def test_prefix_filter_skips_unknown_bin():
     cfg = {
         "pan": {
             "enabled": True,
-            "prefix_file": "__none__",
-            "prefix_line_filter": True,
-            "bin_line_hints": ["55000000"],
+            "prefix_list": ["55000000"],
             "prefix_digits": 8,
+            "prefix_line_filter": True,
         }
     }
     det = PanDetector(cfg)
@@ -63,8 +69,7 @@ def test_detector_finds_configured_prefix():
     cfg = {
         "pan": {
             "enabled": True,
-            "prefix_file": "__none__",
-            "bin_line_hints": ["41111111"],
+            "prefix_list": ["41111111"],
             "prefix_digits": 8,
             "prefix_line_filter": True,
         }

@@ -3,10 +3,10 @@ from __future__ import annotations
 import re
 from typing import Iterator
 
-from regcon.config.pan_prefixes import DEFAULT_PREFIX_LEN, resolve_prefix_path
+from regcon.config.pan_prefixes import DEFAULT_PREFIX_LEN, load_prefixes
 from regcon.util.pan_luhn import luhn_valid_digits
 from regcon.models import Finding
-from regcon.util.pan_prefix_index import PanPrefixIndex, build_prefix_index
+from regcon.util.pan_prefix_index import PanPrefixIndex
 
 DATE_IN_LINE_RE = re.compile(
     r"\d{4}[-/.]\d{1,2}[-/.]\d{1,2}"
@@ -67,8 +67,6 @@ def _overlaps_date_spans(
     for abs_start, abs_end in date_spans:
         if abs_start < end and abs_end > start:
             return True
-        if abs_end == start or abs_start == end:
-            return True
     return False
 
 
@@ -111,7 +109,7 @@ def _format_pan_display(digits: str) -> str:
 class PanDetector:
     """
     Поиск PAN по справочнику первых 8 цифр (txt) + Luhn.
-    Файл: config/pan_prefixes.txt — одна запись на строку.
+    Справочник: pan.prefix_list в config.yaml (первые 8 цифр).
     """
 
     def __init__(self, config: dict) -> None:
@@ -120,15 +118,7 @@ class PanDetector:
         self.use_luhn = pan_cfg.get("use_luhn", True)
         self.context_radius = int(pan_cfg.get("context_radius", 30))
         self._prefix_len = int(pan_cfg.get("prefix_digits", DEFAULT_PREFIX_LEN))
-        prefix_path = resolve_prefix_path(config)
-        extra = tuple(
-            h
-            for h in pan_cfg.get("bin_line_hints", [])
-            if isinstance(h, str) and h.isdigit()
-        )
-        self._prefix_index = build_prefix_index(
-            prefix_path, extra, self._prefix_len
-        )
+        self._prefix_index = PanPrefixIndex(load_prefixes(config), self._prefix_len)
         self._prefix_line_filter = bool(pan_cfg.get("prefix_line_filter", True))
 
     @property
