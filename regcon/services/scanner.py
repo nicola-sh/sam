@@ -9,6 +9,7 @@ from regcon.models import Finding
 from regcon.services.scan_line import scan_line_with_detectors
 from regcon.util.cancel import CancelCallback, check_cancelled
 from regcon.util.job_progress import JobProgress
+from regcon.util.paths import normalize_file_path
 
 try:
     import openpyxl
@@ -69,18 +70,27 @@ class FileScanner:
             self._byte_buf = 0
 
     def _open_text(self, path: Path):
-        try:
-            return path.open(
-                encoding=self.encoding,
-                errors="replace",
-                buffering=self._read_buffer,
-            )
-        except OSError:
-            return path.open(
-                encoding=self.fallback_encoding,
-                errors="replace",
-                buffering=self._read_buffer,
-            )
+        for enc in (self.encoding, self.fallback_encoding):
+            try:
+                handle = path.open(
+                    encoding=enc,
+                    errors="strict",
+                    buffering=self._read_buffer,
+                )
+                pos = handle.tell()
+                handle.read(8192)
+                handle.seek(pos)
+                return handle
+            except (UnicodeDecodeError, OSError):
+                try:
+                    handle.close()
+                except Exception:  # noqa: BLE001
+                    pass
+        return path.open(
+            encoding=self.fallback_encoding,
+            errors="replace",
+            buffering=self._read_buffer,
+        )
 
     def scan_text_file(
         self,
@@ -89,7 +99,7 @@ class FileScanner:
         cancel: CancelCallback = None,
         progress: JobProgress | None = None,
     ) -> list[Finding]:
-        file_path = str(path)
+        file_path = normalize_file_path(path)
         findings: list[Finding] = []
         with self._open_text(path) as handle:
             for line_no, line in enumerate(handle, start=1):
@@ -127,7 +137,7 @@ class FileScanner:
         progress: JobProgress | None = None,
     ) -> list[Finding]:
         findings: list[Finding] = []
-        file_path = str(path)
+        file_path = normalize_file_path(path)
         with self._open_text(path) as handle:
             reader = csv.reader(handle)
             for line_no, row in enumerate(reader, start=1):
@@ -149,7 +159,7 @@ class FileScanner:
         progress: JobProgress | None = None,
     ) -> list[Finding]:
         findings: list[Finding] = []
-        file_path = str(path)
+        file_path = normalize_file_path(path)
         try:
             chunks = pd.read_csv(
                 path,
@@ -192,7 +202,7 @@ class FileScanner:
         if openpyxl is None:
             raise RuntimeError("openpyxl не установлен — нужен для Excel")
         findings: list[Finding] = []
-        file_path = str(path)
+        file_path = normalize_file_path(path)
         workbook = openpyxl.load_workbook(path, read_only=True, data_only=True)
         line_no = 0
         try:
@@ -244,7 +254,7 @@ class FileScanner:
         progress: JobProgress | None = None,
     ) -> list[Finding]:
         findings: list[Finding] = []
-        file_path = str(path)
+        file_path = normalize_file_path(path)
         frame = pd.read_excel(path, dtype=str, header=None)
         for line_no, row in enumerate(frame.itertuples(index=False), start=1):
             row_text = "\t".join(str(v) for v in row)

@@ -20,12 +20,16 @@ class PanPrefixIndex:
     Поиск: в строке находим начало по префиксу → собираем 13–19 цифр → Luhn.
     """
 
-    __slots__ = ("count", "prefix_len", "_prefixes", "_starters")
+    __slots__ = ("count", "prefix_len", "_prefixes", "_starters", "_use_luhn")
 
     def __init__(
-        self, prefixes: list[str], prefix_len: int = DEFAULT_PREFIX_LEN
+        self,
+        prefixes: list[str],
+        prefix_len: int = DEFAULT_PREFIX_LEN,
+        use_luhn: bool = True,
     ) -> None:
         self.prefix_len = prefix_len
+        self._use_luhn = use_luhn
         self._prefixes: frozenset[str] = frozenset()
         self._starters: set[str] = set()
         valid = {
@@ -80,7 +84,7 @@ class PanPrefixIndex:
                 if len(digits) < length:
                     continue
                 chunk = digits[:length]
-                if not luhn_valid_digits(chunk):
+                if self._use_luhn and not luhn_valid_digits(chunk):
                     continue
                 start = positions[0]
                 end = positions[length - 1] + 1

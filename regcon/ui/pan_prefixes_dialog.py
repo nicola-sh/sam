@@ -90,11 +90,5 @@ class PanPrefixesDialog(QDialog):
             self.editor.setPlainText(prefixes_to_text(items))
 
     def _save(self) -> None:
-        count = save_prefixes_from_text(
-            self.editor.toPlainText(), self.prefix_len
-        )
-        self.config.setdefault("pan", {})["prefix_list"] = load_prefixes_from_text(
-            self.editor.toPlainText(), self.prefix_len
-        )
-        del count
+        save_prefixes_from_text(self.editor.toPlainText(), self.prefix_len)
         self.accept()

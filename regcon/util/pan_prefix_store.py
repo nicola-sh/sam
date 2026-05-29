@@ -62,6 +62,8 @@ def load_prefixes(prefix_len: int = DEFAULT_PREFIX_LEN) -> list[str]:
             raw_list = doc.get("prefix_list", [])
         return _normalize_list(raw_list, prefix_len)
     except Exception:
+        if raw.startswith(_MAGIC):
+            return []
         return _migrate_from_legacy_plaintext(path, prefix_len)
 
 

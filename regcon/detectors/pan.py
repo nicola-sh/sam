@@ -108,10 +108,7 @@ def _format_pan_display(digits: str) -> str:
 
 
 class PanDetector:
-    """
-    Поиск PAN по справочнику первых 8 цифр (txt) + Luhn.
-    Справочник: pan.prefix_list в config.yaml (первые 8 цифр).
-    """
+    """Поиск PAN по справочнику первых 8 цифр (pan_prefix.yaml) + Luhn."""
 
     def __init__(self, config: dict) -> None:
         pan_cfg = config.get("pan", {})
@@ -120,7 +117,9 @@ class PanDetector:
         self.context_radius = int(pan_cfg.get("context_radius", 30))
         self._prefix_len = int(pan_cfg.get("prefix_digits", DEFAULT_PREFIX_LEN))
         self._prefix_index = PanPrefixIndex(
-            load_stored_prefixes(self._prefix_len), self._prefix_len
+            load_stored_prefixes(self._prefix_len),
+            self._prefix_len,
+            use_luhn=self.use_luhn,
         )
         self._prefix_line_filter = bool(pan_cfg.get("prefix_line_filter", True))
 
@@ -153,8 +152,6 @@ class PanDetector:
             if not is_plausible_pan(
                 digits, line, start, end, date_spans=date_spans
             ):
-                continue
-            if self.use_luhn and not luhn_valid_digits(digits):
                 continue
             yield Finding.create(
                 file_path=file_path,

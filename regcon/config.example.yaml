@@ -8,7 +8,10 @@ regcon:
   progress_batch_bytes: 65536
   read_buffer_bytes: 1048576
   max_table_rows: 5000  # размер страницы таблицы (◀ ▶)
+  max_findings: 200000  # лимит находок в памяти за один скан
   context_radius: 30
+  last_output_dir: ""
+  mask_sensitive_ui_log: false
 
 # Префиксы PAN — зашифрованный pan_prefix.yaml рядом с exe (редактор: кнопка 8…)
 pan:

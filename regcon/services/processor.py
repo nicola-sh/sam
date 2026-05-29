@@ -68,10 +68,16 @@ class FileProcessor(FileScanner):
         findings_by_line: dict[int, list[Finding]],
         output_dir: Path,
         on_line: Callable[[int], None] | None = None,
+        cancel: CancelCallback = None,
+        progress: JobProgress | None = None,
     ) -> Path:
         if pd is not None:
-            return self._mask_csv_pandas(path, findings_by_line, output_dir, on_line)
-        return self._mask_csv_stdlib(path, findings_by_line, output_dir, on_line)
+            return self._mask_csv_pandas(
+                path, findings_by_line, output_dir, on_line, cancel, progress
+            )
+        return self._mask_csv_stdlib(
+            path, findings_by_line, output_dir, on_line, cancel, progress
+        )
 
     def _mask_csv_stdlib(
         self,
@@ -79,6 +85,8 @@ class FileProcessor(FileScanner):
         findings_by_line: dict[int, list[Finding]],
         output_dir: Path,
         on_line: Callable[[int], None] | None = None,
+        cancel: CancelCallback = None,
+        progress: JobProgress | None = None,
     ) -> Path:
         target = self.output_path(path, output_dir)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -88,6 +96,7 @@ class FileProcessor(FileScanner):
             reader = csv.reader(src)
             writer = csv.writer(dst)
             for line_no, row in enumerate(reader, start=1):
+                self._tick(",".join(row) + "\n", cancel, progress)
                 if on_line:
                     on_line(line_no)
                 items = findings_by_line.get(line_no, [])
@@ -113,6 +122,8 @@ class FileProcessor(FileScanner):
         findings_by_line: dict[int, list[Finding]],
         output_dir: Path,
         on_line: Callable[[int], None] | None = None,
+        cancel: CancelCallback = None,
+        progress: JobProgress | None = None,
     ) -> Path:
         target = self.output_path(path, output_dir)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -128,6 +139,7 @@ class FileProcessor(FileScanner):
                 encoding=self.fallback_encoding,
             )
         for line_no in range(1, len(frame) + 1):
+            self._tick("\n", cancel, progress)
             if on_line:
                 on_line(line_no)
             items = findings_by_line.get(line_no, [])
@@ -154,6 +166,8 @@ class FileProcessor(FileScanner):
         findings_by_line: dict[int, list[Finding]],
         output_dir: Path,
         on_line: Callable[[int], None] | None = None,
+        cancel: CancelCallback = None,
+        progress: JobProgress | None = None,
     ) -> Path:
         if openpyxl is None:
             raise RuntimeError("openpyxl не установлен")
@@ -166,6 +180,7 @@ class FileProcessor(FileScanner):
         for sheet in workbook.worksheets:
             for row in sheet.iter_rows():
                 line_no += 1
+                self._tick("\n", cancel, progress)
                 if on_line:
                     on_line(line_no)
                 items = findings_by_line.get(line_no, [])
@@ -203,9 +218,13 @@ class FileProcessor(FileScanner):
                 path, by_line, output_dir, on_line, cancel, progress
             )
         if suffix == ".csv":
-            return self.mask_csv_file(path, by_line, output_dir, on_line)
+            return self.mask_csv_file(
+                path, by_line, output_dir, on_line, cancel, progress
+            )
         if suffix in {".xlsx", ".xlsm", ".xls"}:
-            return self.mask_excel_file(path, by_line, output_dir, on_line)
+            return self.mask_excel_file(
+                path, by_line, output_dir, on_line, cancel, progress
+            )
         return self.mask_text_file(
             path, by_line, output_dir, on_line, cancel, progress
         )
