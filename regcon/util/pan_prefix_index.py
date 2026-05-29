@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from regcon.config.pan_prefixes import DEFAULT_PREFIX_LEN, load_prefix_lines
+from regcon.config.pan_prefixes import DEFAULT_PREFIX_LEN
 from regcon.util.pan_luhn import luhn_valid_digits
 
 # Длины PAN после совпадения 8 цифр префикса (сначала типичная 16)
@@ -36,10 +36,6 @@ class PanPrefixIndex:
         self._prefixes = frozenset(valid)
         self._starters = {p[0] for p in self._prefixes}
         self.count = len(self._prefixes)
-
-    @classmethod
-    def from_file(cls, path: Path, prefix_len: int = DEFAULT_PREFIX_LEN) -> PanPrefixIndex:
-        return cls(load_prefix_lines(path, prefix_len), prefix_len)
 
     @property
     def enabled(self) -> bool:
@@ -132,11 +128,7 @@ class PanPrefixIndex:
 
 
 def build_prefix_index(
-    prefix_file: Path | None,
-    extra_hints: tuple[str, ...],
+    prefixes: list[str],
     prefix_len: int = DEFAULT_PREFIX_LEN,
 ) -> PanPrefixIndex:
-    prefixes: list[str] = [h[:prefix_len] for h in extra_hints if h.isdigit()]
-    if prefix_file and prefix_file.is_file():
-        prefixes.extend(load_prefix_lines(prefix_file, prefix_len))
     return PanPrefixIndex(prefixes, prefix_len)

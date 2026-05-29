@@ -15,11 +15,11 @@ pan:
   use_luhn: true
   mask_keep_first: 6
   mask_keep_last: 4
-  prefix_file: config/pan_prefixes.txt
   prefix_digits: 8
   prefix_line_filter: true
+  prefix_list:
+    - "91123912"
   context_radius: 30
-  bin_line_hints: []
 
 ip:
   enabled: true
