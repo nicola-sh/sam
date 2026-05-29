@@ -11,6 +11,7 @@ from regcon.services.scanner import FileScanner
 from regcon.util.cancel import CancelledError
 from regcon.util.job_progress import JobProgress
 from regcon.util.paths import path_lookup_key
+from regcon.util.privacy import wipe_findings
 
 try:
     from PyQt6.QtCore import QThread, pyqtSignal
@@ -186,6 +187,8 @@ class Worker(QThread):
             "mask",
             {"files": [str(p) for p in paths], "replacements": len(selected)},
         )
+        wipe_findings(self.findings)
+        self.findings = []
 
     def _run_csv2xlsx(self) -> None:
         mask_first = bool(self.job_options.get("mask_before", False))

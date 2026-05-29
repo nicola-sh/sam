@@ -11,7 +11,7 @@ regcon:
   max_findings: 200000  # лимит находок в памяти за один скан
   context_radius: 30
   last_output_dir: ""
-  mask_sensitive_ui_log: false
+  purge_findings_after_mask: true  # очистить PAN из RAM после маски
 
 # Префиксы PAN — зашифрованный pan_prefix.yaml рядом с exe (редактор: кнопка 8…)
 pan:
