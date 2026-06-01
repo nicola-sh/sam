@@ -34,8 +34,8 @@ try:
         QLabel,
         QMainWindow,
         QMessageBox,
-        QPushButton,
         QProgressBar,
+        QPushButton,
         QTableWidget,
         QTableWidgetItem,
         QTextEdit,
@@ -56,14 +56,15 @@ except ImportError:  # pragma: no cover
         QLabel,
         QMainWindow,
         QMessageBox,
-        QPushButton,
         QProgressBar,
+        QPushButton,
         QTableWidget,
         QTableWidgetItem,
         QTextEdit,
         QVBoxLayout,
         QWidget,
     )
+
 
 if _PYQT6:
     _CHECKED = Qt.CheckState.Checked
@@ -83,11 +84,9 @@ else:
 _TYPE_SORT = {"PAN": 0, "IP": 1, "PASSWORD": 2}
 
 
-class MainWindow(QMainWindow):
+class RegConWidget(QWidget):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("RegCon")
-        self.resize(960, 580)
         self.config_path = default_config_path()
         self.config = load_config(self.config_path)
         self.files: list[str] = []
@@ -124,9 +123,7 @@ class MainWindow(QMainWindow):
             self._refresh_pan_tooltip()
 
     def _build_ui(self) -> None:
-        central = QWidget()
-        self.setCentralWidget(central)
-        root = QVBoxLayout(central)
+        root = QVBoxLayout(self)
         root.setSpacing(6)
         root.setContentsMargins(8, 8, 8, 8)
 
@@ -409,6 +406,14 @@ class MainWindow(QMainWindow):
         self._page_index = 0
         self.files_label.setText("Файлы: нет")
 
+    def hint_export_dir(self, path: str) -> None:
+        folder = Path(path)
+        if not folder.is_dir():
+            return
+        self.output_dir = str(folder)
+        self.out_label.setText(folder.name)
+        self.out_label.setToolTip(str(folder))
+
     def _browse_output(self) -> None:
         path = QFileDialog.getExistingDirectory(
             self, "Папка результатов", self.output_dir
@@ -478,12 +483,16 @@ class MainWindow(QMainWindow):
         self.config.setdefault("regcon", {})["last_output_dir"] = self.output_dir
         save_config(self.config, self.config_path)
 
-    def closeEvent(self, event) -> None:  # noqa: N802
+    def shutdown(self) -> None:
+        """Сохранить настройки и очистить память (вкладка SAM или закрытие окна)."""
         self._persist_settings()
         if self.worker and self.worker.isRunning():
             self.worker.requestInterruption()
             self.worker.wait(30_000)
         self._purge_session_findings()
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        self.shutdown()
         super().closeEvent(event)
 
     def _start_worker(self, **kwargs: Any) -> None:
@@ -698,13 +707,34 @@ class MainWindow(QMainWindow):
             self._append_log("Очищено из памяти.")
 
 
-def run_app() -> None:
+# Совместимость со старым импортом
+MainWindow = RegConWidget
+
+
+class _RegConStandaloneWindow(QMainWindow):
+    def __init__(self) -> None:
+        super().__init__()
+        self.setWindowTitle("RegCon")
+        self.resize(960, 580)
+        self._panel = RegConWidget()
+        self.setCentralWidget(self._panel)
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        self._panel.shutdown()
+        super().closeEvent(event)
+
+
+def run_standalone() -> None:
     app = QApplication(sys.argv)
     app.setStyleSheet(APP_STYLESHEET)
-    window = MainWindow()
+    window = _RegConStandaloneWindow()
     window.show()
     sys.exit(app.exec())
 
 
+def run_app() -> None:
+    run_standalone()
+
+
 if __name__ == "__main__":
-    run_app()
+    run_standalone()
