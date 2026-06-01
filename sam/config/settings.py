@@ -10,43 +10,48 @@ from sam.util.app_paths import bundled_config_path, user_config_path
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "sam": {
-        "window_title": "SAM — выгрузка логов АТМ",
+        "window_title": "SAM — выгрузка логов",
         "last_export_dir": "",
         "ssh_timeout_sec": 30,
         "command_timeout_sec": 3600,
+    },
+    "vault": {
+        "path": "vault.enc",
     },
     "ssh": {
         "host": "10.11.44.10",
         "port": 22,
         "username": "",
         "password": "",
+        "password_secret": "",
         "key_filename": "",
         "look_for_keys": True,
         "allow_agent": True,
     },
-    "atm_ddc": {
-        "service_dir": "/srv_mproc/mproc/services/atm-ddc-service",
-        "arch_subdir": "/log_arch",
-        "main_subdir": "/log",
-        "log_kinds": [
-            {
-                "id": "DDC",
-                "arch_prefix": "atm-ddc",
-                "main_name": "atm-ddc",
-            },
-            {
-                "id": "DDC5556",
-                "arch_prefix": "atm-ddc5556",
-                "main_name": "atm-ddc5556",
-            },
-        ],
-    },
+    "microservices": [
+        {
+            "id": "atm-ddc",
+            "name": "ATM DDC Service",
+            "service_dir": "/srv_mproc/mproc/services/atm-ddc-service",
+            "arch_subdir": "/log_arch",
+            "main_subdir": "/log",
+            "outputs": [
+                {"id": "DDC", "arch_prefix": "atm-ddc", "main_name": "atm-ddc"},
+                {
+                    "id": "DDC5556",
+                    "arch_prefix": "atm-ddc5556",
+                    "main_name": "atm-ddc5556",
+                },
+            ],
+        },
+    ],
     "upload": {
         "enabled": False,
         "host": "10.11.44.10",
         "port": 22,
         "username": "",
         "password": "",
+        "password_secret": "",
         "remote_dir": "/home/BELINVESTBANK/shirnin_nv",
     },
 }
@@ -86,9 +91,14 @@ def save_config(cfg: dict[str, Any], path: Path | None = None) -> None:
     if path is None:
         path = user_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
+    safe = deepcopy(cfg)
+    for section in ("ssh", "upload"):
+        block = safe.get(section)
+        if isinstance(block, dict) and block.get("password_secret"):
+            block["password"] = ""
     with path.open("w", encoding="utf-8") as fh:
         yaml.safe_dump(
-            cfg,
+            safe,
             fh,
             allow_unicode=True,
             default_flow_style=False,

@@ -1,29 +1,46 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from sam.util.dates import AtmLogDateFormats
 
-
-def normalize_atm_id(atm_id: str) -> str:
-    text = atm_id.strip().upper()
-    if not text:
-        raise ValueError("Укажите номер АТМ")
-    return text
+_UNSAFE = re.compile(r"[^\w.\-]+", re.ASCII)
 
 
-def target_dir(download_root: Path, atm_id: str) -> Path:
-    return download_root / normalize_atm_id(atm_id)
+def safe_label(text: str, *, max_len: int = 40) -> str:
+    cleaned = _UNSAFE.sub("_", text.strip())
+    return (cleaned or "log")[:max_len]
+
+
+def export_subdir(
+    download_root: Path,
+    service_id: str,
+    label: str,
+) -> Path:
+    return download_root / safe_label(service_id) / safe_label(label)
 
 
 def output_file_path(
     download_root: Path,
-    atm_id: str,
+    service_id: str,
+    label: str,
     formats: AtmLogDateFormats,
-    log_kind: str,
+    output_id: str,
+    *,
+    grep_value: str | None,
 ) -> Path:
-    """Имя как в скрипте: {ATM}_{MMDD}_{KIND}.txt"""
-    atm = normalize_atm_id(atm_id)
-    suffix = log_kind.strip().upper()
-    name = f"{atm}_{formats.date_exit_file}_{suffix}.txt"
-    return target_dir(download_root, atm) / name
+    """
+    Имя файла:
+    - с grep: {label}_{MMDD}_{OUTPUT}.txt
+    - без grep: {service}_{MMDD}_{OUTPUT}_full.txt
+    """
+    out_dir = export_subdir(download_root, service_id, label)
+    suffix = safe_label(output_id).upper()
+    if grep_value:
+        base = f"{safe_label(label)}_{formats.date_exit_file}_{suffix}.txt"
+    else:
+        base = (
+            f"{safe_label(service_id)}_{formats.date_exit_file}_{suffix}_full.txt"
+        )
+    return out_dir / base

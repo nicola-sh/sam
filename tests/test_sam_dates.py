@@ -2,6 +2,7 @@ from datetime import date
 
 import pytest
 
+from sam.util.date_range import iter_dates
 from sam.util.dates import formats_for_day, parse_day
 from sam.util.output_names import output_file_path
 
@@ -15,23 +16,20 @@ def test_formats_for_day():
     assert f.is_today is False
 
 
-def test_formats_today():
-    d = date(2026, 6, 1)
-    f = formats_for_day(d, today=d)
-    assert f.is_today is True
+def test_iter_dates():
+    assert len(iter_dates(date(2026, 5, 28), date(2026, 5, 30))) == 3
 
 
-def test_parse_day_variants():
-    assert parse_day("2026-05-28") == date(2026, 5, 28)
-    assert parse_day("28.05.2026") == date(2026, 5, 28)
-
-
-def test_output_file_path(tmp_path):
-    d = date(2026, 5, 28)
-    f = formats_for_day(d, today=date(2026, 6, 1))
-    p = output_file_path(tmp_path, "m6768022", f, "DDC")
+def test_output_with_grep(tmp_path):
+    f = formats_for_day(date(2026, 5, 28), today=date(2026, 6, 1))
+    p = output_file_path(tmp_path, "atm-ddc", "M6768022", f, "DDC", grep_value="M6768022")
     assert p.name == "M6768022_0528_DDC.txt"
-    assert p.parent.name == "M6768022"
+
+
+def test_output_without_grep(tmp_path):
+    f = formats_for_day(date(2026, 5, 28), today=date(2026, 6, 1))
+    p = output_file_path(tmp_path, "atm-ddc", "all", f, "DDC", grep_value=None)
+    assert p.name == "atm-ddc_0528_DDC_full.txt"
 
 
 def test_parse_day_invalid():

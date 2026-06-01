@@ -1,3 +1,3 @@
-from sam.services.atm_ddc_fetcher import AtmDdcFetchResult, AtmDdcFetcher
+from sam.services.log_fetcher import FetchResult, LogFetcher
 
-__all__ = ["AtmDdcFetcher", "AtmDdcFetchResult"]
+__all__ = ["FetchResult", "LogFetcher"]
