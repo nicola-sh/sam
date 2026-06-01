@@ -9,19 +9,26 @@ from pathlib import Path
 from sam.auth.session import SamUser
 from sam.audit.audit_log import AuditLogger
 from sam.config.runtime import load_runtime_config
-from sam.config.settings import load_config, save_config, sam_cfg
+from sam.config.settings import save_config, sam_cfg
 from sam.models.microservice import microservice_by_id, parse_microservices
+from sam.ui.connections_panel import ConnectionsPanel
 from sam.ui.infrastructure_dialog import InfrastructureDialog
 from sam.ui.styles import APP_STYLESHEET
 from sam.ui.users_dialog import UsersDialog
-from sam.util.app_paths import default_export_dir, user_config_path
+from sam.util.app_paths import (
+    app_data_dir,
+    default_export_dir,
+    user_config_path,
+    users_db_path,
+)
 from sam.util.date_range import iter_dates
 from sam.util.masking import mask_ipv4
 from sam.vault.session import VaultSession
+from sam.vault.store import vault_path_from_config
 from sam.workers.fetch_worker import FetchWorker
 
 try:
-    from PyQt6.QtCore import QDate
+    from PyQt6.QtCore import QDate, Qt
     from PyQt6.QtWidgets import (
         QApplication,
         QCheckBox,
@@ -35,6 +42,7 @@ try:
         QMainWindow,
         QMessageBox,
         QPushButton,
+        QTabWidget,
         QTextEdit,
         QVBoxLayout,
         QWidget,
@@ -42,7 +50,7 @@ try:
     _PYQT6 = True
 except ImportError:  # pragma: no cover
     _PYQT6 = False
-    from PyQt5.QtCore import QDate  # type: ignore
+    from PyQt5.QtCore import QDate, Qt  # type: ignore
     from PyQt5.QtWidgets import (  # type: ignore
         QApplication,
         QCheckBox,
@@ -56,6 +64,7 @@ except ImportError:  # pragma: no cover
         QMainWindow,
         QMessageBox,
         QPushButton,
+        QTabWidget,
         QTextEdit,
         QVBoxLayout,
         QWidget,
@@ -64,6 +73,17 @@ except ImportError:  # pragma: no cover
 
 def run_qt_app(app: QApplication) -> int:
     return app.exec()
+
+
+def _section(layout: QVBoxLayout, title: str, hint: str = "") -> None:
+    t = QLabel(title)
+    t.setObjectName("sectionTitle")
+    layout.addWidget(t)
+    if hint:
+        h = QLabel(hint)
+        h.setObjectName("sectionHint")
+        h.setWordWrap(True)
+        layout.addWidget(h)
 
 
 class MainWindow(QMainWindow):
@@ -86,34 +106,29 @@ class MainWindow(QMainWindow):
         sam = sam_cfg(self.config)
         title = str(sam.get("window_title", "SAM"))
         self.setWindowTitle(f"{title} — {user.display_name}")
-        self.resize(780, 580)
+        self.resize(820, 620)
         self.worker: FetchWorker | None = None
         last = str(sam.get("last_export_dir") or "").strip()
         self.export_dir = last if last and Path(last).is_dir() else str(default_export_dir())
         self._build_ui()
-        self._reload_services()
+        self._refresh_all()
         self.audit.record("ui.open", user=user.login, status="ok", role=user.role)
         self.logger.info("Main window opened for %s", user.login)
-
-    def _reload_runtime_config(self) -> None:
-        self.config = load_runtime_config(self.vault_session.vault)
-        self._reload_services()
-        ssh = self.config.get("ssh", {})
-        self.ssh_label.setText(
-            f"SSH: {ssh.get('username', '—')}@{mask_ipv4(str(ssh.get('host', '')))}"
-        )
 
     def _build_ui(self) -> None:
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
+        root.setContentsMargins(12, 10, 12, 12)
         root.setSpacing(8)
-        root.setContentsMargins(12, 12, 12, 12)
 
         header = QHBoxLayout()
-        title = QLabel("Выгрузка логов микросервисов")
-        title.setStyleSheet("font-size: 15px; font-weight: 600;")
-        header.addWidget(title)
+        brand = QLabel("SAM")
+        brand.setObjectName("appTitle")
+        sub = QLabel(f"  ·  {self.user.display_name} ({self.user.role})")
+        sub.setObjectName("hintLabel")
+        header.addWidget(brand)
+        header.addWidget(sub)
         header.addStretch()
         btn_logout = QPushButton("Выйти")
         btn_logout.setObjectName("secondaryBtn")
@@ -121,71 +136,110 @@ class MainWindow(QMainWindow):
         header.addWidget(btn_logout)
         root.addLayout(header)
 
-        form = QGroupBox("Параметры")
-        fl = QVBoxLayout(form)
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._build_download_tab(), "Скачивание логов")
+        self.connections_panel = ConnectionsPanel(
+            is_admin=self.user.is_admin,
+            on_edit=self._edit_infrastructure,
+        )
+        self.tabs.addTab(self.connections_panel, "Подключения")
+        if self.user.is_admin:
+            self.tabs.addTab(self._build_users_tab(), "Пользователи")
+        self.tabs.addTab(self._build_help_tab(), "Справка")
+        root.addWidget(self.tabs, stretch=1)
+
+    def _build_download_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        # --- ОТКУДА ---
+        from_box = QGroupBox("Откуда скачать")
+        from_layout = QVBoxLayout(from_box)
+
+        self.source_summary = QLabel()
+        self.source_summary.setObjectName("hintLabel")
+        self.source_summary.setWordWrap(True)
+        from_layout.addWidget(self.source_summary)
 
         row_svc = QHBoxLayout()
         row_svc.addWidget(QLabel("Микросервис:"))
         self.service_combo = QComboBox()
+        self.service_combo.setMinimumWidth(260)
         row_svc.addWidget(self.service_combo, stretch=1)
-        if self.user.is_admin:
-            btn_infra = QPushButton("Инфраструктура…")
-            btn_infra.setObjectName("secondaryBtn")
-            btn_infra.clicked.connect(self._edit_infrastructure)
-            row_svc.addWidget(btn_infra)
-            btn_users = QPushButton("Пользователи…")
-            btn_users.setObjectName("secondaryBtn")
-            btn_users.clicked.connect(self._edit_users)
-            row_svc.addWidget(btn_users)
-        fl.addLayout(row_svc)
-
-        self.chk_grep = QCheckBox("Фильтр по значению (grep / zgrep)")
-        self.chk_grep.toggled.connect(lambda c: self.grep_edit.setEnabled(c))
-        fl.addWidget(self.chk_grep)
-        row_grep = QHBoxLayout()
-        row_grep.addWidget(QLabel("Значение:"))
-        self.grep_edit = QLineEdit()
-        self.grep_edit.setEnabled(False)
-        row_grep.addWidget(self.grep_edit, stretch=1)
-        fl.addLayout(row_grep)
+        from_layout.addLayout(row_svc)
 
         row_dates = QHBoxLayout()
-        row_dates.addWidget(QLabel("Дата с:"))
+        row_dates.addWidget(QLabel("Период:"))
+        row_dates.addWidget(QLabel("с"))
         self.date_from = QDateEdit()
         self.date_from.setCalendarPopup(True)
         self.date_from.setDisplayFormat("dd.MM.yyyy")
         self.date_from.setDate(QDate.currentDate())
         row_dates.addWidget(self.date_from)
-        row_dates.addWidget(QLabel("по:"))
+        row_dates.addWidget(QLabel("по"))
         self.date_to = QDateEdit()
         self.date_to.setCalendarPopup(True)
         self.date_to.setDisplayFormat("dd.MM.yyyy")
         self.date_to.setDate(QDate.currentDate())
         row_dates.addWidget(self.date_to)
         row_dates.addStretch()
-        fl.addLayout(row_dates)
+        from_layout.addLayout(row_dates)
 
+        self.chk_grep = QCheckBox("Искать только строки с текстом (grep / zgrep)")
+        self.chk_grep.toggled.connect(lambda c: self.grep_edit.setEnabled(c))
+        from_layout.addWidget(self.chk_grep)
+        row_grep = QHBoxLayout()
+        row_grep.addWidget(QLabel("Текст в логе:"))
+        self.grep_edit = QLineEdit()
+        self.grep_edit.setPlaceholderText("например номер АТМ M6768022")
+        self.grep_edit.setEnabled(False)
+        row_grep.addWidget(self.grep_edit, stretch=1)
+        from_layout.addLayout(row_grep)
+
+        layout.addWidget(from_box)
+
+        # --- КУДА (локально) ---
+        to_box = QGroupBox("Куда сохранить на этом компьютере")
+        to_layout = QVBoxLayout(to_box)
+        hint_local = QLabel(
+            "Сюда попадут файлы .txt после выгрузки. Сервер с логами не изменяется."
+        )
+        hint_local.setObjectName("sectionHint")
+        hint_local.setWordWrap(True)
+        to_layout.addWidget(hint_local)
         row_dir = QHBoxLayout()
-        row_dir.addWidget(QLabel("Папка:"))
         self.dir_edit = QLineEdit(self.export_dir)
-        btn_dir = QPushButton("…")
+        self.dir_edit.setPlaceholderText("Папка на диске…")
+        btn_dir = QPushButton("Выбрать папку…")
         btn_dir.setObjectName("secondaryBtn")
-        btn_dir.setFixedWidth(32)
         btn_dir.clicked.connect(self._pick_export_dir)
         row_dir.addWidget(self.dir_edit, stretch=1)
         row_dir.addWidget(btn_dir)
-        fl.addLayout(row_dir)
+        to_layout.addLayout(row_dir)
+        layout.addWidget(to_box)
 
-        ssh = self.config.get("ssh", {})
-        self.ssh_label = QLabel(
-            f"SSH: {ssh.get('username', '—')}@{mask_ipv4(str(ssh.get('host', '')))}"
+        # --- КУДА (upload) ---
+        upload_box = QGroupBox("Куда загрузить копию (опционально)")
+        ul = QVBoxLayout(upload_box)
+        self.upload_summary = QLabel()
+        self.upload_summary.setWordWrap(True)
+        self.upload_summary.setObjectName("hintLabel")
+        ul.addWidget(self.upload_summary)
+        link = QLabel(
+            'Настраивается на вкладке «Подключения». По умолчанию выключено — '
+            "только скачивание, без записи на сервер."
         )
-        self.ssh_label.setObjectName("hintLabel")
-        fl.addWidget(self.ssh_label)
-        root.addWidget(form)
+        link.setObjectName("sectionHint")
+        link.setWordWrap(True)
+        ul.addWidget(link)
+        layout.addWidget(upload_box)
 
+        # --- действия + лог ---
         actions = QHBoxLayout()
         self.btn_fetch = QPushButton("Скачать логи")
+        self.btn_fetch.setObjectName("primaryLarge")
         self.btn_fetch.clicked.connect(self._start_fetch)
         self.btn_cancel = QPushButton("Отмена")
         self.btn_cancel.setObjectName("stopBtn")
@@ -198,12 +252,99 @@ class MainWindow(QMainWindow):
         actions.addWidget(self.btn_cancel)
         actions.addStretch()
         actions.addWidget(btn_open)
-        root.addLayout(actions)
+        layout.addLayout(actions)
 
+        _section(layout, "Ход операции")
         self.log_view = QTextEdit()
         self.log_view.setObjectName("logView")
         self.log_view.setReadOnly(True)
-        root.addWidget(self.log_view, stretch=1)
+        self.log_view.setMinimumHeight(140)
+        layout.addWidget(self.log_view, stretch=1)
+
+        return page
+
+    def _build_users_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(16, 16, 16, 16)
+        _section(
+            layout,
+            "Пользователи SAM",
+            "Учётные записи для входа в программу. Пароли хранятся как bcrypt-хэш.",
+        )
+        btn = QPushButton("Управление пользователями…")
+        btn.setObjectName("primaryLarge")
+        btn.clicked.connect(self._edit_users)
+        layout.addWidget(btn)
+        layout.addStretch()
+        return page
+
+    def _build_help_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(16, 16, 16, 16)
+        data = app_data_dir()
+        text = QLabel(
+            "<b>Как это работает</b><br><br>"
+            "1. Вкладка <b>«Подключения»</b> — укажите сервер, с которого читать логи, "
+            "микросервисы и пути (файл vault).<br>"
+            "2. Вкладка <b>«Скачивание логов»</b> — выберите микросервис, дату, "
+            "при необходимости текст для grep.<br>"
+            "3. Блок <b>«Куда сохранить»</b> — папка на вашем ПК.<br><br>"
+            "<b>Файлы</b><br>"
+            f"• Настройки: <code>{user_config_path()}</code><br>"
+            f"• Подключения (шифр.): <code>{vault_path_from_config(self.public_config, data)}</code><br>"
+            f"• Пользователи: <code>{users_db_path()}</code><br>"
+            f"• Аудит: <code>{data / 'audit'}</code><br>"
+            f"• Технический лог: <code>{data / 'logs'}</code><br><br>"
+            "<b>Безопасность</b><br>"
+            "На сервере с логами выполняются только команды чтения "
+            "(zgrep, grep, zcat, cat). Файлы логов не изменяются."
+        )
+        text.setWordWrap(True)
+        text.setTextFormat(Qt.TextFormat.RichText if _PYQT6 else Qt.RichText)
+        text.setOpenExternalLinks(False)
+        layout.addWidget(text)
+        layout.addStretch()
+        return page
+
+    def _refresh_all(self) -> None:
+        self.config = load_runtime_config(self.vault_session.vault)
+        self._reload_services()
+        self._refresh_source_summary()
+        self._refresh_upload_summary()
+        data = app_data_dir()
+        self.connections_panel.set_paths(
+            self.config_path,
+            vault_path_from_config(self.public_config, data),
+            users_db_path(),
+        )
+        self.connections_panel.refresh_summary(self.config)
+
+    def _refresh_source_summary(self) -> None:
+        ssh = self.config.get("ssh") or {}
+        host = mask_ipv4(str(ssh.get("host") or ""))
+        user = ssh.get("username") or "—"
+        if ssh.get("host"):
+            self.source_summary.setText(
+                f"Сервер логов: {user}@{host}  ·  "
+                "данные читаются по SSH, без изменений на сервере."
+            )
+        else:
+            self.source_summary.setText(
+                "Сервер не настроен. Откройте вкладку «Подключения»."
+            )
+
+    def _refresh_upload_summary(self) -> None:
+        up = self.config.get("upload") or {}
+        if up.get("enabled"):
+            uh = mask_ipv4(str(up.get("host") or ""))
+            self.upload_summary.setText(
+                f"После скачивания файлы будут отправлены на: "
+                f"{up.get('username', '—')}@{uh} → {up.get('remote_dir') or '?'}"
+            )
+        else:
+            self.upload_summary.setText("Выключено — файлы остаются только на этом ПК.")
 
     def _reload_services(self) -> None:
         self.service_combo.clear()
@@ -218,17 +359,20 @@ class MainWindow(QMainWindow):
             self,
         )
         if dlg.exec():
-            self._reload_runtime_config()
+            self._refresh_all()
             self.audit.record("config.reload", user=self.user.login, status="ok")
 
     def _edit_users(self) -> None:
         from sam.auth.users import UserStore
-        from sam.util.app_paths import users_db_path
 
         UsersDialog(UserStore(users_db_path()), self.audit, self.user.login, self).exec()
 
     def _pick_export_dir(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "Папка для логов", self.dir_edit.text())
+        path = QFileDialog.getExistingDirectory(
+            self,
+            "Куда сохранить логи на этом компьютере",
+            self.dir_edit.text(),
+        )
         if path:
             self.dir_edit.setText(path)
 
@@ -250,7 +394,13 @@ class MainWindow(QMainWindow):
 
     def _start_fetch(self) -> None:
         if self.service_combo.count() == 0:
-            QMessageBox.warning(self, "SAM", "Нет микросервисов. Админ: «Инфраструктура…».")
+            QMessageBox.warning(
+                self,
+                "SAM",
+                "Нет микросервисов.\n\nОткройте вкладку «Подключения» "
+                "и настройте серверы.",
+            )
+            self.tabs.setCurrentWidget(self.connections_panel)
             return
         service_id = self.service_combo.currentData()
         service = microservice_by_id(self.config, service_id)
@@ -262,23 +412,29 @@ class MainWindow(QMainWindow):
         if self.chk_grep.isChecked():
             grep = self.grep_edit.text().strip()
             if not grep:
-                QMessageBox.warning(self, "SAM", "Введите значение для grep.")
+                QMessageBox.warning(self, "SAM", "Введите текст для поиска в логе.")
                 return
             label = grep
 
         dates = iter_dates(self._qdate_to_py(self.date_from), self._qdate_to_py(self.date_to))
         if len(dates) > 31:
-            QMessageBox.warning(self, "SAM", "Не более 31 дня за раз.")
+            QMessageBox.warning(self, "SAM", "Не более 31 дня за один раз.")
             return
 
         export = self.dir_edit.text().strip()
         if not export:
-            QMessageBox.warning(self, "SAM", "Укажите папку.")
+            QMessageBox.warning(self, "SAM", "Укажите папку «Куда сохранить».")
             return
 
         ssh = self.config.get("ssh", {})
         if not ssh.get("host") or not ssh.get("username"):
-            QMessageBox.warning(self, "SAM", "Заполните SSH в «Инфраструктура…».")
+            QMessageBox.warning(
+                self,
+                "SAM",
+                "Не настроен сервер «Откуда скачать».\n\n"
+                "Вкладка «Подключения» → «Изменить серверы и микросервисы».",
+            )
+            self.tabs.setCurrentWidget(self.connections_panel)
             return
 
         self.public_config.setdefault("sam", {})["last_export_dir"] = export
@@ -353,7 +509,6 @@ class MainWindow(QMainWindow):
 
 
 def run_app() -> None:
-    """Совместимость: полный цикл через sam.__main__.main()."""
     from sam.__main__ import main
 
     raise SystemExit(main())

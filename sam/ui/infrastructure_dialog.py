@@ -51,7 +51,7 @@ class InfrastructureDialog(QDialog):
         self.vault_session = vault_session
         self.audit = audit
         self.user_login = user_login
-        self.setWindowTitle("Инфраструктура (зашифровано)")
+        self.setWindowTitle("Подключения — серверы, микросервисы, пути к логам")
         self.resize(560, 480)
         self._secure = load_secure_config(vault_session.vault)
 
@@ -63,9 +63,9 @@ class InfrastructureDialog(QDialog):
             )
         )
         tabs = QTabWidget()
-        tabs.addTab(self._ssh_tab(), "SSH")
-        tabs.addTab(self._microservices_tab(), "Микросервисы")
-        tabs.addTab(self._upload_tab(), "Upload")
+        tabs.addTab(self._ssh_tab(), "Откуда скачивать (SSH)")
+        tabs.addTab(self._microservices_tab(), "Микросервисы и пути")
+        tabs.addTab(self._upload_tab(), "Куда загрузить копию")
         root.addWidget(tabs)
 
         buttons = QDialogButtonBox(
