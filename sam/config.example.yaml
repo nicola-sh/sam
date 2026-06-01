@@ -1,0 +1,13 @@
+# Публичный конфиг SAM — без IP, паролей и путей (всё в vault.enc)
+# Скопируйте в sam_app_data/config.yaml
+
+sam:
+  last_export_dir: ""
+  audit_dir: audit
+  logs_dir: logs
+  session_timeout_min: 60
+
+vault:
+  path: vault.enc
+
+# SSH, microservices, upload — только через UI «Инфраструктура…» или vault
