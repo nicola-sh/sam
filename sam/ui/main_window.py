@@ -21,7 +21,9 @@ from sam.util.app_paths import (
     user_config_path,
     users_db_path,
 )
+from sam.util.archive_names import default_archive_basename, sanitize_archive_basename, archive_filename
 from sam.util.date_range import iter_dates
+from sam.services.zip_archive import ArchiveError, create_password_zip
 from sam.util.masking import mask_ipv4
 from sam.vault.session import VaultSession
 from sam.vault.store import vault_path_from_config
@@ -219,6 +221,36 @@ class MainWindow(QMainWindow):
         row_dir.addWidget(btn_dir)
         to_layout.addLayout(row_dir)
         layout.addWidget(to_box)
+
+        # --- АРХИВ ---
+        arch_box = QGroupBox("Архив с паролем (опционально)")
+        arch_layout = QVBoxLayout(arch_box)
+        arch_hint = QLabel(
+            "После скачивания собрать файлы в ZIP с паролем (AES). "
+            "Имя по умолчанию: log_ММДД-ЧЧММ, например log_0601-1053."
+        )
+        arch_hint.setObjectName("sectionHint")
+        arch_hint.setWordWrap(True)
+        arch_layout.addWidget(arch_hint)
+        self.chk_archive = QCheckBox("Создать ZIP-архив с паролем")
+        self.chk_archive.toggled.connect(self._on_archive_toggled)
+        arch_layout.addWidget(self.chk_archive)
+        row_arch_name = QHBoxLayout()
+        row_arch_name.addWidget(QLabel("Имя архива:"))
+        self.archive_name_edit = QLineEdit(default_archive_basename())
+        self.archive_name_edit.setPlaceholderText("log_0601-1053")
+        self.archive_name_edit.setEnabled(False)
+        row_arch_name.addWidget(self.archive_name_edit, stretch=1)
+        row_arch_name.addWidget(QLabel(".zip"))
+        arch_layout.addLayout(row_arch_name)
+        row_arch_pwd = QHBoxLayout()
+        row_arch_pwd.addWidget(QLabel("Пароль архива:"))
+        self.archive_password_edit = QLineEdit()
+        self.archive_password_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.archive_password_edit.setPlaceholderText("задайте пароль для ZIP")
+        self.archive_password_edit.setEnabled(False)
+        arch_layout.addLayout(row_arch_pwd)
+        layout.addWidget(arch_box)
 
         # --- КУДА (upload) ---
         upload_box = QGroupBox("Куда загрузить копию (опционально)")
@@ -440,6 +472,8 @@ class MainWindow(QMainWindow):
         self.public_config.setdefault("sam", {})["last_export_dir"] = export
         save_config(self.public_config, self.config_path)
 
+        if self.chk_archive.isChecked():
+            self.archive_name_edit.setText(default_archive_basename())
         self.log_view.clear()
         self.audit.record(
             "log.fetch.start",
@@ -450,6 +484,7 @@ class MainWindow(QMainWindow):
             date_to=str(dates[-1]),
             grep_enabled=bool(grep),
             days=len(dates),
+            archive_enabled=self.chk_archive.isChecked(),
         )
         self.btn_fetch.setEnabled(False)
         self.btn_cancel.setEnabled(True)
@@ -489,7 +524,43 @@ class MainWindow(QMainWindow):
         if not result.files:
             QMessageBox.information(self, "SAM", "Совпадений не найдено.")
             return
-        QMessageBox.information(self, "SAM", f"Сохранено файлов: {len(result.files)}")
+
+        msg = f"Сохранено файлов: {len(result.files)}"
+        want_arch, base_name, arch_pwd = self._archive_options()
+        if want_arch:
+            if not arch_pwd:
+                QMessageBox.warning(self, "SAM", "Укажите пароль для архива.")
+                return
+            export_dir = Path(self.dir_edit.text().strip())
+            zip_name = archive_filename(base_name)
+            zip_path = export_dir / zip_name
+            try:
+                self._append_log(f"Архивирование → {zip_name}…")
+                create_password_zip(
+                    result.files,
+                    output_path=zip_path,
+                    password=arch_pwd,
+                )
+                self.audit.record(
+                    "log.archive",
+                    user=self.user.login,
+                    status="ok",
+                    archive_name=zip_name,
+                    file_count=len(result.files),
+                )
+                msg += f"\n\nАрхив: {zip_path}"
+                self._append_log(f"Архив создан: {zip_path}")
+            except ArchiveError as exc:
+                self.audit.record(
+                    "log.archive",
+                    user=self.user.login,
+                    status="error",
+                    message=str(exc),
+                )
+                QMessageBox.critical(self, "SAM", f"Ошибка архива: {exc}")
+                return
+
+        QMessageBox.information(self, "SAM", msg)
 
     def _on_cancelled(self) -> None:
         self.btn_fetch.setEnabled(True)
