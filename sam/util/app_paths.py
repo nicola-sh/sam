@@ -7,6 +7,7 @@ from pathlib import Path
 USER_CONFIG_FILE = "config.yaml"
 UI_LOG_FILE = "sam_ui.log"
 EXPORT_SUBDIR = "sam-exports"
+USERS_FILE = "users.json"
 
 
 def _is_writable_dir(path: Path) -> bool:
@@ -46,8 +47,8 @@ def user_config_path() -> Path:
     return app_data_dir() / USER_CONFIG_FILE
 
 
-def ui_log_path() -> Path:
-    return app_data_dir() / UI_LOG_FILE
+def users_db_path() -> Path:
+    return app_data_dir() / USERS_FILE
 
 
 def default_export_dir() -> Path:

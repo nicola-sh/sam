@@ -1,17 +1,22 @@
 from __future__ import annotations
 
+import logging
 import subprocess
 import sys
 from datetime import date
 from pathlib import Path
 
+from sam.auth.session import SamUser
+from sam.audit.audit_log import AuditLogger
+from sam.config.runtime import load_runtime_config
 from sam.config.settings import load_config, save_config, sam_cfg
 from sam.models.microservice import microservice_by_id, parse_microservices
-from sam.ui.microservices_dialog import MicroservicesDialog
+from sam.ui.infrastructure_dialog import InfrastructureDialog
 from sam.ui.styles import APP_STYLESHEET
-from sam.ui.vault_dialog import VaultSecretsDialog, VaultUnlockDialog
+from sam.ui.users_dialog import UsersDialog
 from sam.util.app_paths import default_export_dir, user_config_path
 from sam.util.date_range import iter_dates
+from sam.util.masking import mask_ipv4
 from sam.vault.session import VaultSession
 from sam.workers.fetch_worker import FetchWorker
 
@@ -34,7 +39,9 @@ try:
         QVBoxLayout,
         QWidget,
     )
+    _PYQT6 = True
 except ImportError:  # pragma: no cover
+    _PYQT6 = False
     from PyQt5.QtCore import QDate  # type: ignore
     from PyQt5.QtWidgets import (  # type: ignore
         QApplication,
@@ -55,33 +62,46 @@ except ImportError:  # pragma: no cover
     )
 
 
+def run_qt_app(app: QApplication) -> int:
+    return app.exec()
+
+
 class MainWindow(QMainWindow):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        user: SamUser,
+        public_config: dict,
+        vault_session: VaultSession,
+        audit: AuditLogger,
+        logger: logging.Logger,
+    ) -> None:
         super().__init__()
+        self.user = user
+        self.public_config = public_config
+        self.vault_session = vault_session
+        self.audit = audit
+        self.logger = logger
         self.config_path = user_config_path()
-        self.config = load_config()
-        self.vault_session = VaultSession.get(self.config)
-        self._ensure_vault()
+        self.config = load_runtime_config(vault_session.vault)
         sam = sam_cfg(self.config)
-        self.setWindowTitle(str(sam.get("window_title", "SAM")))
-        self.resize(760, 560)
+        title = str(sam.get("window_title", "SAM"))
+        self.setWindowTitle(f"{title} — {user.display_name}")
+        self.resize(780, 580)
         self.worker: FetchWorker | None = None
         last = str(sam.get("last_export_dir") or "").strip()
         self.export_dir = last if last and Path(last).is_dir() else str(default_export_dir())
         self._build_ui()
         self._reload_services()
+        self.audit.record("ui.open", user=user.login, status="ok", role=user.role)
+        self.logger.info("Main window opened for %s", user.login)
 
-    def _ensure_vault(self) -> None:
-        if self.vault_session.try_auto_unlock():
-            return
-        if self.vault_session.needs_unlock():
-            dlg = VaultUnlockDialog(self.vault_session, self)
-            if dlg.exec() != dlg.DialogCode.Accepted:
-                QMessageBox.warning(
-                    self,
-                    "SAM",
-                    "Без vault нельзя использовать password_secret в конфиге.",
-                )
+    def _reload_runtime_config(self) -> None:
+        self.config = load_runtime_config(self.vault_session.vault)
+        self._reload_services()
+        ssh = self.config.get("ssh", {})
+        self.ssh_label.setText(
+            f"SSH: {ssh.get('username', '—')}@{mask_ipv4(str(ssh.get('host', '')))}"
+        )
 
     def _build_ui(self) -> None:
         central = QWidget()
@@ -90,18 +110,16 @@ class MainWindow(QMainWindow):
         root.setSpacing(8)
         root.setContentsMargins(12, 12, 12, 12)
 
+        header = QHBoxLayout()
         title = QLabel("Выгрузка логов микросервисов")
         title.setStyleSheet("font-size: 15px; font-weight: 600;")
-        root.addWidget(title)
-
-        hint = QLabel(
-            "Выберите микросервис и дату (или период). "
-            "С фильтром — grep/zgrep по значению (АТМ и т.п.); "
-            "без фильтра — полный лог за день из архива (zcat)."
-        )
-        hint.setObjectName("hintLabel")
-        hint.setWordWrap(True)
-        root.addWidget(hint)
+        header.addWidget(title)
+        header.addStretch()
+        btn_logout = QPushButton("Выйти")
+        btn_logout.setObjectName("secondaryBtn")
+        btn_logout.clicked.connect(self.close)
+        header.addWidget(btn_logout)
+        root.addLayout(header)
 
         form = QGroupBox("Параметры")
         fl = QVBoxLayout(form)
@@ -109,22 +127,24 @@ class MainWindow(QMainWindow):
         row_svc = QHBoxLayout()
         row_svc.addWidget(QLabel("Микросервис:"))
         self.service_combo = QComboBox()
-        self.service_combo.setMinimumWidth(220)
         row_svc.addWidget(self.service_combo, stretch=1)
-        btn_svc = QPushButton("Сервисы…")
-        btn_svc.setObjectName("secondaryBtn")
-        btn_svc.clicked.connect(self._edit_services)
-        row_svc.addWidget(btn_svc)
+        if self.user.is_admin:
+            btn_infra = QPushButton("Инфраструктура…")
+            btn_infra.setObjectName("secondaryBtn")
+            btn_infra.clicked.connect(self._edit_infrastructure)
+            row_svc.addWidget(btn_infra)
+            btn_users = QPushButton("Пользователи…")
+            btn_users.setObjectName("secondaryBtn")
+            btn_users.clicked.connect(self._edit_users)
+            row_svc.addWidget(btn_users)
         fl.addLayout(row_svc)
 
         self.chk_grep = QCheckBox("Фильтр по значению (grep / zgrep)")
-        self.chk_grep.toggled.connect(self._on_grep_toggled)
+        self.chk_grep.toggled.connect(lambda c: self.grep_edit.setEnabled(c))
         fl.addWidget(self.chk_grep)
-
         row_grep = QHBoxLayout()
         row_grep.addWidget(QLabel("Значение:"))
         self.grep_edit = QLineEdit()
-        self.grep_edit.setPlaceholderText("например M6768022")
         self.grep_edit.setEnabled(False)
         row_grep.addWidget(self.grep_edit, stretch=1)
         fl.addLayout(row_grep)
@@ -157,10 +177,8 @@ class MainWindow(QMainWindow):
         fl.addLayout(row_dir)
 
         ssh = self.config.get("ssh", {})
-        secret = ssh.get("password_secret") or ""
-        sec_hint = f" · vault: {secret}" if secret else ""
         self.ssh_label = QLabel(
-            f"SSH: {ssh.get('username', '—')}@{ssh.get('host', '—')}{sec_hint}"
+            f"SSH: {ssh.get('username', '—')}@{mask_ipv4(str(ssh.get('host', '')))}"
         )
         self.ssh_label.setObjectName("hintLabel")
         fl.addWidget(self.ssh_label)
@@ -173,15 +191,11 @@ class MainWindow(QMainWindow):
         self.btn_cancel.setObjectName("stopBtn")
         self.btn_cancel.setEnabled(False)
         self.btn_cancel.clicked.connect(self._cancel_fetch)
-        btn_vault = QPushButton("Секреты…")
-        btn_vault.setObjectName("secondaryBtn")
-        btn_vault.clicked.connect(self._edit_vault)
         btn_open = QPushButton("Открыть папку")
         btn_open.setObjectName("secondaryBtn")
         btn_open.clicked.connect(self._open_export_dir)
         actions.addWidget(self.btn_fetch)
         actions.addWidget(self.btn_cancel)
-        actions.addWidget(btn_vault)
         actions.addStretch()
         actions.addWidget(btn_open)
         root.addLayout(actions)
@@ -191,26 +205,27 @@ class MainWindow(QMainWindow):
         self.log_view.setReadOnly(True)
         root.addWidget(self.log_view, stretch=1)
 
-    def _on_grep_toggled(self, checked: bool) -> None:
-        self.grep_edit.setEnabled(checked)
-
     def _reload_services(self) -> None:
         self.service_combo.clear()
         for svc in parse_microservices(self.config):
             self.service_combo.addItem(svc.display_name, svc.id)
 
-    def _edit_services(self) -> None:
-        dlg = MicroservicesDialog(self.config, self.config_path, self)
+    def _edit_infrastructure(self) -> None:
+        dlg = InfrastructureDialog(
+            self.vault_session,
+            self.audit,
+            self.user.login,
+            self,
+        )
         if dlg.exec():
-            self.config = load_config()
-            self._reload_services()
+            self._reload_runtime_config()
+            self.audit.record("config.reload", user=self.user.login, status="ok")
 
-    def _edit_vault(self) -> None:
-        if not self.vault_session.is_unlocked:
-            dlg = VaultUnlockDialog(self.vault_session, self)
-            if dlg.exec() != dlg.DialogCode.Accepted:
-                return
-        VaultSecretsDialog(self.vault_session, self).exec()
+    def _edit_users(self) -> None:
+        from sam.auth.users import UserStore
+        from sam.util.app_paths import users_db_path
+
+        UsersDialog(UserStore(users_db_path()), self.audit, self.user.login, self).exec()
 
     def _pick_export_dir(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Папка для логов", self.dir_edit.text())
@@ -227,64 +242,59 @@ class MainWindow(QMainWindow):
 
     def _append_log(self, text: str) -> None:
         self.log_view.append(text)
+        self.logger.info(text)
 
     def _qdate_to_py(self, widget: QDateEdit) -> date:
         qd = widget.date()
         return date(qd.year(), qd.month(), qd.day())
 
-    def _persist_export_dir(self) -> None:
-        path = self.dir_edit.text().strip()
-        if path:
-            self.config.setdefault("sam", {})["last_export_dir"] = path
-            save_config(self.config, self.config_path)
-
     def _start_fetch(self) -> None:
         if self.service_combo.count() == 0:
-            QMessageBox.warning(self, "SAM", "Добавьте микросервис (кнопка «Сервисы…»).")
+            QMessageBox.warning(self, "SAM", "Нет микросервисов. Админ: «Инфраструктура…».")
             return
         service_id = self.service_combo.currentData()
         service = microservice_by_id(self.config, service_id)
         if service is None:
-            QMessageBox.warning(self, "SAM", "Микросервис не найден в конфиге.")
             return
 
-        grep: str | None = None
+        grep = None
         label = "all"
         if self.chk_grep.isChecked():
             grep = self.grep_edit.text().strip()
             if not grep:
-                QMessageBox.warning(self, "SAM", "Включён фильтр — введите значение для grep.")
+                QMessageBox.warning(self, "SAM", "Введите значение для grep.")
                 return
             label = grep
 
-        d_from = self._qdate_to_py(self.date_from)
-        d_to = self._qdate_to_py(self.date_to)
-        dates = iter_dates(d_from, d_to)
+        dates = iter_dates(self._qdate_to_py(self.date_from), self._qdate_to_py(self.date_to))
         if len(dates) > 31:
-            QMessageBox.warning(self, "SAM", "Максимум 31 день за один запрос.")
+            QMessageBox.warning(self, "SAM", "Не более 31 дня за раз.")
             return
 
         export = self.dir_edit.text().strip()
         if not export:
-            QMessageBox.warning(self, "SAM", "Укажите папку сохранения.")
+            QMessageBox.warning(self, "SAM", "Укажите папку.")
             return
 
         ssh = self.config.get("ssh", {})
         if not ssh.get("host") or not ssh.get("username"):
-            QMessageBox.warning(
-                self,
-                "SAM",
-                f"Заполните ssh.host и ssh.username в\n{self.config_path}",
-            )
+            QMessageBox.warning(self, "SAM", "Заполните SSH в «Инфраструктура…».")
             return
 
-        if self.vault_session.needs_unlock() and not self.vault_session.is_unlocked:
-            QMessageBox.warning(self, "SAM", "Разблокируйте vault (Секреты…).")
-            return
+        self.public_config.setdefault("sam", {})["last_export_dir"] = export
+        save_config(self.public_config, self.config_path)
 
-        self._persist_export_dir()
         self.log_view.clear()
-        self._append_log(f"{service.display_name} · дней: {len(dates)}")
+        self.audit.record(
+            "log.fetch.start",
+            user=self.user.login,
+            status="ok",
+            service_id=service.id,
+            date_from=str(dates[0]),
+            date_to=str(dates[-1]),
+            grep_enabled=bool(grep),
+            days=len(dates),
+        )
         self.btn_fetch.setEnabled(False)
         self.btn_cancel.setEnabled(True)
 
@@ -308,36 +318,42 @@ class MainWindow(QMainWindow):
     def _cancel_fetch(self) -> None:
         if self.worker and self.worker.isRunning():
             self.worker.requestInterruption()
-            self._append_log("Отмена…")
+            self.audit.record("log.fetch.cancel", user=self.user.login, status="ok")
 
-    def _reset_buttons(self) -> None:
+    def _on_finished(self, result) -> None:
+        self.btn_fetch.setEnabled(True)
+        self.btn_cancel.setEnabled(False)
+        self.audit.record(
+            "log.fetch.done",
+            user=self.user.login,
+            status="ok",
+            files=len(result.files),
+            service_id=result.service_id,
+        )
+        if not result.files:
+            QMessageBox.information(self, "SAM", "Совпадений не найдено.")
+            return
+        QMessageBox.information(self, "SAM", f"Сохранено файлов: {len(result.files)}")
+
+    def _on_cancelled(self) -> None:
         self.btn_fetch.setEnabled(True)
         self.btn_cancel.setEnabled(False)
 
-    def _on_finished(self, result) -> None:
-        self._reset_buttons()
-        if not result.files:
-            self._append_log("Готово. Файлы не созданы.")
-            QMessageBox.information(self, "SAM", "Данных за выбранный период не найдено.")
-            return
-        self._append_log(f"Готово. Файлов: {len(result.files)}")
-        names = "\n".join(p.name for p in result.files[:10])
-        extra = "" if len(result.files) <= 10 else f"\n… и ещё {len(result.files) - 10}"
-        QMessageBox.information(self, "SAM", f"Сохранено:\n{names}{extra}")
-
-    def _on_cancelled(self) -> None:
-        self._reset_buttons()
-        self._append_log("Операция отменена.")
-
     def _on_error(self, message: str) -> None:
-        self._reset_buttons()
-        self._append_log(f"Ошибка: {message}")
+        self.btn_fetch.setEnabled(True)
+        self.btn_cancel.setEnabled(False)
+        self.logger.error("Fetch error: %s", message)
+        self.audit.record(
+            "log.fetch.error",
+            user=self.user.login,
+            status="error",
+            message=message,
+        )
         QMessageBox.critical(self, "SAM", message)
 
 
 def run_app() -> None:
-    app = QApplication(sys.argv)
-    app.setStyleSheet(APP_STYLESHEET)
-    window = MainWindow()
-    window.show()
-    sys.exit(app.exec())
+    """Совместимость: полный цикл через sam.__main__.main()."""
+    from sam.__main__ import main
+
+    raise SystemExit(main())

@@ -1,61 +1,44 @@
-# SAM — десктоп (выгрузка логов микросервисов)
+# SAM — десктоп (выгрузка логов)
 
-Модуль **System Admin Management**: SSH-выгрузка логов с нескольких **микросервисов**, настраиваемых в `config.yaml`.
+## Безопасность
 
-## Возможности
+| Что | Как |
+|-----|-----|
+| Несколько пользователей | `sam_app_data/users.json`, пароли только **bcrypt-хэш** |
+| IP, SSH, пути, пароли серверов | В **vault.enc** (AES-GCM), ключ — master-пароль |
+| В интерфейсе | IP показываются маской `10.11.***.***` |
+| Аудит действий | `sam_app_data/audit/audit-YYYY-MM-DD.jsonl` (IP в записях тоже маскируются) |
+| Технический лог | `sam_app_data/logs/sam-YYYY-MM-DD.log` (ошибки, этапы запуска) |
 
-| Режим | Поведение |
-|--------|-----------|
-| **С фильтром** | `zgrep` / `grep` по значению (номер АТМ и т.д.) |
-| **Без фильтра** | `zcat` / `cat` — полный лог за выбранную дату |
-| **Даты** | Один день или период (до 31 дня) |
-| **Микросервисы** | Список в конфиге + редактор в UI («Сервисы…») |
-| **Пароли** | Зашифрованный **vault** (AES-GCM), не plain-text в git |
+## Первый запуск
 
-## Vault и секреты
-
-1. При первом запуске задайте **master-пароль** (диалог).
-2. Меню **«Секреты…»** — сохраните, например, `ssh_password`.
-3. В `config.yaml`:
-
-```yaml
-ssh:
-  username: shirnin_nv
-  host: "10.11.44.10"
-  password_secret: ssh_password
-```
-
-Файлы: `sam_app_data/vault.enc`, опционально `master.key` или переменная `SAM_MASTER_KEY` (base64, 32 байта).
-
-Пароль в открытом виде в конфиге по-прежнему возможен (`password:`), но при сохранении из UI с `password_secret` поле `password` очищается.
-
-## Микросервисы
-
-```yaml
-microservices:
-  - id: atm-ddc
-    name: ATM DDC Service
-    service_dir: /srv_mproc/mproc/services/atm-ddc-service
-    arch_subdir: /log_arch
-    main_subdir: /log
-    outputs:
-      - id: DDC
-        arch_prefix: atm-ddc
-        main_name: atm-ddc
-        main_only_today: true
-```
-
-Добавление других сервисов — через UI или правку YAML.
+1. `python -m sam` — мастер: master vault + admin.
+2. Или CLI: `python -m sam users create-admin ivanov --init-vault`
+3. Вход логином/паролем SAM.
+4. **Инфраструктура…** (admin) — IP, SSH, микросервисы.
+5. **Пользователи…** (admin) — новые операторы.
 
 ## Запуск
 
 ```bat
-scripts\install_offline.bat
 python -m sam
 ```
 
-Шаблон конфига: [`config.example.yaml`](config.example.yaml).
+`python -m sam` = модуль `sam`, файл `sam/__main__.py` (вход, vault, окно).
+
+## Роли
+
+- **operator** — выгрузка логов
+- **admin** — + пользователи, инфраструктура (vault)
+
+## Переменные
+
+- `SAM_MASTER_KEY` — base64, 32 байта (авто-разблокировка vault без диалога)
+
+## Аудит (примеры событий)
+
+`app.start`, `auth.login`, `vault.unlock`, `log.fetch.start`, `log.fetch.done`, `log.fetch.error`, `config.save`, `user.create`
 
 ## Библиотеки
 
-[`docs/AVAILABLE_LIBRARIES.md`](../docs/AVAILABLE_LIBRARIES.md) — **paramiko**, **cryptography**, **PyYAML**, **PyQt6**.
+[`docs/AVAILABLE_LIBRARIES.md`](../docs/AVAILABLE_LIBRARIES.md) — bcrypt, cryptography, paramiko, PyQt6, PyYAML.
