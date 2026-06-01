@@ -9,7 +9,7 @@ from sam.util.masking import mask_ipv4
 try:
     from PyQt6.QtCore import Qt, QUrl
     from PyQt6.QtGui import QDesktopServices
-    _SELECT_TEXT = _SELECT_TEXT
+    _SELECT_TEXT = Qt.TextInteractionFlag.TextSelectableByMouse
     from PyQt6.QtWidgets import (
         QGroupBox,
         QHBoxLayout,
