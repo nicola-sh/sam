@@ -13,6 +13,15 @@ def archived_glob_path(
 ) -> str:
     base = service.service_dir.rstrip("/")
     prefix = output.arch_prefix.strip()
+    if output.arch_glob:
+        path = output.arch_glob.replace("{date_dash}", formats.date_dash)
+        path = path.replace("{date_plain}", formats.date_plain)
+        if not path.startswith("/"):
+            path = f"{base}{service.arch_subdir}/{path}"
+        return path
+    layout = (service.log_layout or "daily").lower()
+    if layout == "hourly":
+        return f"{base}{service.arch_subdir}/{prefix}.{formats.date_dash}-*.*.gz"
     return f"{base}{service.arch_subdir}/{prefix}.{formats.date_dash}.*.gz"
 
 
@@ -53,8 +62,10 @@ def commands_for_output(
     formats: AtmLogDateFormats,
     grep_value: str | None,
 ) -> list[tuple[str, str]]:
+    layout = (service.log_layout or "daily").lower()
+    label_arch = "архив (по часам)" if layout == "hourly" else "архив (за сутки)"
     steps: list[tuple[str, str]] = [
-        ("архив", build_archived_command(service, output, formats, grep_value)),
+        (label_arch, build_archived_command(service, output, formats, grep_value)),
     ]
     include_main = formats.is_today and output.main_only_today
     if formats.is_today and not output.main_only_today:

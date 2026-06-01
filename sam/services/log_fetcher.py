@@ -7,11 +7,15 @@ from typing import Callable
 
 import paramiko
 
-from sam.config.secrets import resolve_ssh_endpoint
+from sam.config.secrets import resolve_ssh_endpoint as resolve_ssh_from_section
 from sam.models.microservice import Microservice
+from sam.models.topology import legacy_ssh_endpoint
 from sam.services.remote_commands import commands_for_output
 from sam.services.ssh_client import SshEndpoint, connect, stream_command
+from sam.services.time_filter import filter_log_bytes
 from sam.util.dates import formats_for_day
+from sam.util.time_window import TimeWindow
+from sam.util.masking import mask_ipv4
 from sam.util.output_names import output_file_path, safe_label
 from sam.vault.store import SecretVault
 
@@ -28,6 +32,9 @@ class FetchResult:
     files: list[Path] = field(default_factory=list)
     line_counts: dict[str, int] = field(default_factory=dict)
     uploaded: list[str] = field(default_factory=list)
+    target_kind: str = ""
+    target_id: str = ""
+    host_id: str = ""
 
 
 class LogFetcher:
@@ -36,6 +43,7 @@ class LogFetcher:
         config: dict,
         vault: SecretVault | None,
         *,
+        ssh_endpoint: SshEndpoint | None = None,
         ssh_section: str = "ssh",
     ) -> None:
         self._config = config
@@ -43,15 +51,19 @@ class LogFetcher:
         self._cmd_timeout = float(sam.get("command_timeout_sec", 3600))
         self._ssh_timeout = float(sam.get("ssh_timeout_sec", 30))
         self._vault = vault
-        self._ssh = resolve_ssh_endpoint(
-            config.get(ssh_section, {}),
-            vault,
-            timeout_sec=self._ssh_timeout,
-        )
+        if ssh_endpoint is not None:
+            self._ssh = ssh_endpoint
+        else:
+            legacy = legacy_ssh_endpoint(config, timeout_sec=self._ssh_timeout)
+            self._ssh = legacy or resolve_ssh_from_section(
+                config.get(ssh_section, {}),
+                vault,
+                timeout_sec=self._ssh_timeout,
+            )
         upload = config.get("upload", {})
         self._upload_enabled = bool(upload.get("enabled"))
         self._upload = (
-            resolve_ssh_endpoint(upload, vault, timeout_sec=self._ssh_timeout)
+            resolve_ssh_from_section(upload, vault, timeout_sec=self._ssh_timeout)
             if self._upload_enabled
             else None
         )
@@ -67,6 +79,11 @@ class LogFetcher:
         label: str | None = None,
         log: LogCallback | None = None,
         cancel: CancelCallback | None = None,
+        target_kind: str = "",
+        target_id: str = "",
+        host_id: str = "",
+        time_window: TimeWindow | None = None,
+        apply_time_filter: bool = False,
     ) -> FetchResult:
         def _log(msg: str) -> None:
             if log:
@@ -82,10 +99,14 @@ class LogFetcher:
             label=folder_label,
             dates=list(dates),
             grep_value=grep,
+            target_kind=target_kind,
+            target_id=target_id,
+            host_id=host_id,
         )
 
         _log(
-            f"Сервис: {service.display_name} · SSH {self._ssh.username}@{self._ssh.host}"
+            f"Сервис: {service.display_name} · узел {self._ssh.username}@"
+            f"{mask_ipv4(self._ssh.host)} · формат логов: {service.log_layout}"
         )
         if grep:
             _log(f"Фильтр grep: {grep}")
@@ -113,6 +134,11 @@ class LogFetcher:
                     )
                     local_path.parent.mkdir(parents=True, exist_ok=True)
                     local_path.write_text("", encoding="utf-8")
+                    day_win = (
+                        time_window.slice_for_day(day)
+                        if time_window and apply_time_filter
+                        else None
+                    )
                     lines = self._collect_output(
                         client,
                         service,
@@ -121,6 +147,7 @@ class LogFetcher:
                         grep,
                         local_path,
                         _log,
+                        day_window=day_win,
                     )
                     result.line_counts[key] = lines
                     if lines > 0:
@@ -146,6 +173,8 @@ class LogFetcher:
         grep_value: str | None,
         local_path: Path,
         log: LogCallback,
+        *,
+        day_window: TimeWindow | None = None,
     ) -> int:
         total_lines = 0
         steps = commands_for_output(service, output, formats, grep_value)
@@ -164,17 +193,20 @@ class LogFetcher:
                 if code not in (0, 1):
                     log(f"      код выхода: {code}")
                 if data:
-                    out_fh.write(data)
-                    if not data.endswith(b"\n"):
-                        out_fh.write(b"\n")
-                    total_lines += data.count(b"\n")
+                    if day_window is not None:
+                        data = filter_log_bytes(data, day_window)
+                    if data:
+                        out_fh.write(data)
+                        if not data.endswith(b"\n"):
+                            out_fh.write(b"\n")
+                        total_lines += data.count(b"\n")
         return total_lines
 
     def _upload_files(self, paths: list[Path], log: LogCallback) -> list[str]:
         if not self._upload or not self._upload_dir:
             raise ValueError("upload.enabled=true, но не задан upload.remote_dir")
         uploaded: list[str] = []
-        log(f"Загрузка на {self._upload.host}:{self._upload_dir}…")
+        log(f"Загрузка на {mask_ipv4(self._upload.host)}…")
         client = connect(self._upload)
         try:
             sftp = client.open_sftp()

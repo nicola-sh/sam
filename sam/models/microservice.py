@@ -3,15 +3,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+LogLayout = str  # daily | hourly
+
 
 @dataclass(frozen=True)
 class LogOutput:
-    """Один выходной файл (например DDC / DDC5556)."""
-
     id: str
     arch_prefix: str
     main_name: str
     main_only_today: bool = True
+    arch_glob: str = ""
 
 
 @dataclass(frozen=True)
@@ -22,7 +23,9 @@ class Microservice:
     arch_subdir: str = "/log_arch"
     main_subdir: str = "/log"
     outputs: tuple[LogOutput, ...] = ()
-    ssh_profile: str = "default"
+    target_type: str = "legacy"
+    target_id: str = ""
+    log_layout: LogLayout = "daily"
 
     @property
     def display_name(self) -> str:
@@ -42,6 +45,7 @@ def _parse_output(raw: dict[str, Any]) -> LogOutput:
         arch_prefix=str(raw.get("arch_prefix") or raw.get("arch_glob_prefix") or ""),
         main_name=str(raw.get("main_name") or raw.get("main_file") or ""),
         main_only_today=bool(raw.get("main_only_today", True)),
+        arch_glob=str(raw.get("arch_glob") or "").strip(),
     )
 
 
@@ -50,6 +54,10 @@ def _parse_one(raw: dict[str, Any]) -> Microservice:
     outputs = tuple(_parse_output(o) for o in outputs_raw)
     if not outputs:
         outputs = (LogOutput(id="main", arch_prefix="app", main_name="app"),)
+    target_type = str(raw.get("target_type") or "legacy").strip().lower()
+    target_id = str(raw.get("target_id") or "").strip()
+    if target_type == "legacy" and not target_id:
+        target_id = "default"
     return Microservice(
         id=str(raw.get("id") or "service"),
         name=str(raw.get("name") or raw.get("id") or "service"),
@@ -57,7 +65,9 @@ def _parse_one(raw: dict[str, Any]) -> Microservice:
         arch_subdir=_norm_subdir(str(raw.get("arch_subdir", "/log_arch")), "/log_arch"),
         main_subdir=_norm_subdir(str(raw.get("main_subdir", "/log")), "/log"),
         outputs=outputs,
-        ssh_profile=str(raw.get("ssh_profile") or "default"),
+        target_type=target_type,
+        target_id=target_id,
+        log_layout=str(raw.get("log_layout") or "daily").strip().lower(),
     )
 
 
@@ -70,6 +80,9 @@ def parse_microservices(config: dict[str, Any]) -> list[Microservice]:
                 {
                     "id": "atm-ddc",
                     "name": "ATM DDC Service",
+                    "target_type": "server",
+                    "target_id": "atm",
+                    "log_layout": "daily",
                     "service_dir": legacy.get("service_dir"),
                     "arch_subdir": legacy.get("arch_subdir", "/log_arch"),
                     "main_subdir": legacy.get("main_subdir", "/log"),
@@ -98,3 +111,18 @@ def microservice_by_id(config: dict[str, Any], service_id: str) -> Microservice 
         if svc.id == service_id:
             return svc
     return None
+
+
+def microservices_for_source(
+    config: dict[str, Any],
+    target_kind: str,
+    target_id: str,
+) -> list[Microservice]:
+    all_svc = parse_microservices(config)
+    if target_kind == "legacy":
+        return [s for s in all_svc if s.target_type in ("legacy", "")]
+    return [
+        s
+        for s in all_svc
+        if s.target_type == target_kind and s.target_id == target_id
+    ] or [s for s in all_svc if s.target_type == "legacy"]
