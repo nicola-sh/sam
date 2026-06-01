@@ -10,7 +10,16 @@ from sam.auth.session import SamUser
 from sam.audit.audit_log import AuditLogger
 from sam.config.runtime import load_runtime_config
 from sam.config.settings import save_config, sam_cfg
-from sam.models.microservice import microservice_by_id, parse_microservices
+from sam.models.microservice import (
+    microservice_by_id,
+    microservices_for_source,
+    parse_microservices,
+)
+from sam.models.topology import (
+    hosts_for_source,
+    list_download_sources,
+    resolve_ssh_endpoint,
+)
 from sam.ui.connections_panel import ConnectionsPanel
 from sam.ui.infrastructure_dialog import InfrastructureDialog
 from sam.ui.styles import APP_STYLESHEET
@@ -164,6 +173,22 @@ class MainWindow(QMainWindow):
         self.source_summary.setObjectName("hintLabel")
         self.source_summary.setWordWrap(True)
         from_layout.addWidget(self.source_summary)
+
+        row_src = QHBoxLayout()
+        row_src.addWidget(QLabel("Источник:"))
+        self.source_combo = QComboBox()
+        self.source_combo.setMinimumWidth(200)
+        self.source_combo.currentIndexChanged.connect(self._on_source_changed)
+        row_src.addWidget(self.source_combo, stretch=1)
+        from_layout.addLayout(row_src)
+
+        row_host = QHBoxLayout()
+        self.host_label = QLabel("Узел кластера:")
+        row_host.addWidget(self.host_label)
+        self.host_combo = QComboBox()
+        self.host_combo.setMinimumWidth(200)
+        row_host.addWidget(self.host_combo, stretch=1)
+        from_layout.addLayout(row_host)
 
         row_svc = QHBoxLayout()
         row_svc.addWidget(QLabel("Микросервис:"))
@@ -342,7 +367,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_all(self) -> None:
         self.config = load_runtime_config(self.vault_session.vault)
-        self._reload_services()
+        self._reload_sources()
         self._refresh_source_summary()
         self._refresh_upload_summary()
         data = app_data_dir()
@@ -354,17 +379,23 @@ class MainWindow(QMainWindow):
         self.connections_panel.refresh_summary(self.config)
 
     def _refresh_source_summary(self) -> None:
-        ssh = self.config.get("ssh") or {}
-        host = mask_ipv4(str(ssh.get("host") or ""))
-        user = ssh.get("username") or "—"
-        if ssh.get("host"):
-            self.source_summary.setText(
-                f"Сервер логов: {user}@{host}  ·  "
-                "данные читаются по SSH, без изменений на сервере."
+        kind, sid = self._current_source()
+        try:
+            host_id = self.host_combo.currentData() if kind == "cluster" else None
+            ep = resolve_ssh_endpoint(
+                self.config,
+                target_kind=kind,
+                target_id=sid,
+                host_id=str(host_id) if host_id else None,
+                timeout_sec=float(sam_cfg(self.config).get("ssh_timeout_sec", 30)),
             )
-        else:
             self.source_summary.setText(
-                "Сервер не настроен. Откройте вкладку «Подключения»."
+                f"Подключение только на время выгрузки · {ep.username}@"
+                f"{mask_ipv4(ep.host)} · без изменений файлов на сервере"
+            )
+        except ValueError:
+            self.source_summary.setText(
+                "Источник не настроен. Вкладка «Подключения» → изменить серверы."
             )
 
     def _refresh_upload_summary(self) -> None:
@@ -378,10 +409,46 @@ class MainWindow(QMainWindow):
         else:
             self.upload_summary.setText("Выключено — файлы остаются только на этом ПК.")
 
+
+    def _on_source_changed(self) -> None:
+        self._reload_hosts()
+        self._reload_sources()
+        self._refresh_source_summary()
+
+    def _current_source(self) -> tuple[str, str]:
+        data = self.source_combo.currentData()
+        if data and len(data) >= 2:
+            return str(data[0]), str(data[1])
+        return "legacy", "default"
+
+    def _reload_sources(self) -> None:
+        self.source_combo.blockSignals(True)
+        self.source_combo.clear()
+        for kind, sid, label in list_download_sources(self.config):
+            self.source_combo.addItem(label, (kind, sid))
+        self.source_combo.blockSignals(False)
+        if self.source_combo.count():
+            self.source_combo.setCurrentIndex(0)
+        self._on_source_changed()
+
+    def _reload_hosts(self) -> None:
+        kind, sid = self._current_source()
+        is_cluster = kind == "cluster"
+        self.host_label.setVisible(is_cluster)
+        self.host_combo.setVisible(is_cluster)
+        self.host_combo.clear()
+        if is_cluster:
+            for h in hosts_for_source(self.config, kind, sid):
+                self.host_combo.addItem(h.id, h.id)
+            if self.host_combo.count():
+                self.host_combo.setCurrentIndex(0)
+
     def _reload_services(self) -> None:
+        kind, sid = self._current_source()
         self.service_combo.clear()
-        for svc in parse_microservices(self.config):
-            self.service_combo.addItem(svc.display_name, svc.id)
+        for svc in microservices_for_source(self.config, kind, sid):
+            layout = "сутки" if svc.log_layout != "hourly" else "по часам"
+            self.service_combo.addItem(f"{svc.display_name} ({layout})", svc.id)
 
     def _edit_infrastructure(self) -> None:
         dlg = InfrastructureDialog(
@@ -458,14 +525,18 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "SAM", "Укажите папку «Куда сохранить».")
             return
 
-        ssh = self.config.get("ssh", {})
-        if not ssh.get("host") or not ssh.get("username"):
-            QMessageBox.warning(
-                self,
-                "SAM",
-                "Не настроен сервер «Откуда скачать».\n\n"
-                "Вкладка «Подключения» → «Изменить серверы и микросервисы».",
+        kind, sid = self._current_source()
+        host_id = str(self.host_combo.currentData() or "") if kind == "cluster" else None
+        try:
+            ssh_ep = resolve_ssh_endpoint(
+                self.config,
+                target_kind=kind,
+                target_id=sid,
+                host_id=host_id,
+                timeout_sec=float(sam_cfg(self.config).get("ssh_timeout_sec", 30)),
             )
+        except ValueError as exc:
+            QMessageBox.warning(self, "SAM", str(exc))
             self.tabs.setCurrentWidget(self.connections_panel)
             return
 
@@ -485,6 +556,9 @@ class MainWindow(QMainWindow):
             grep_enabled=bool(grep),
             days=len(dates),
             archive_enabled=self.chk_archive.isChecked(),
+            target_kind=kind,
+            target_id=sid,
+            host_id=host_id or "",
         )
         self.btn_fetch.setEnabled(False)
         self.btn_cancel.setEnabled(True)
@@ -498,6 +572,10 @@ class MainWindow(QMainWindow):
             grep,
             vault,
             label=label,
+            ssh_endpoint=ssh_ep,
+            target_kind=kind,
+            target_id=sid,
+            host_id=host_id or "",
             parent=self,
         )
         self.worker.log.connect(self._append_log)

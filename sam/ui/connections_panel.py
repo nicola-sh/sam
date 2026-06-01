@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from sam.models.microservice import parse_microservices
+from sam.models.topology import parse_clusters, parse_servers
 from sam.util.masking import mask_ipv4
 
 try:
@@ -93,7 +94,7 @@ class ConnectionsPanel(QWidget):
         self.lbl_services.setWordWrap(True)
         self.lbl_upload = QLabel()
         self.lbl_upload.setWordWrap(True)
-        sl.addWidget(QLabel("Откуда скачивать логи (SSH к серверу логов):"))
+        sl.addWidget(QLabel("Кластеры FO/BO и серверы (ATM):"))
         sl.addWidget(self.lbl_ssh)
         sl.addWidget(QLabel("Микросервисы и пути к логам:"))
         sl.addWidget(self.lbl_services)
@@ -135,18 +136,21 @@ class ConnectionsPanel(QWidget):
         self.lbl_users.setText(str(users_path.resolve()))
 
     def refresh_summary(self, config: dict[str, Any]) -> None:
-        ssh = config.get("ssh") or {}
-        host = mask_ipv4(str(ssh.get("host") or ""))
-        user = ssh.get("username") or "—"
-        if host and host != "—":
-            self.lbl_ssh.setText(f"  {user}@{host}  (порт {ssh.get('port', 22)})")
+        cl_lines = []
+        for c in parse_clusters(config):
+            cl_lines.append(f"  • {c.display_name} ({c.id}): {len(c.hosts)} узл.")
+        for s in parse_servers(config):
+            cl_lines.append(f"  • {s.display_name} ({s.id}): {mask_ipv4(s.host) or '—'}")
+        if cl_lines:
+            self.lbl_ssh.setText(chr(10).join(cl_lines))
         else:
             self.lbl_ssh.setObjectName("statusWarn")
-            self.lbl_ssh.setText("  Не настроено — нажмите «Изменить серверы…»")
+            self.lbl_ssh.setText("  Не настроено — «Изменить серверы…»")
 
         lines = []
         for svc in parse_microservices(config):
-            lines.append(f"  • {svc.display_name} — {svc.service_dir}")
+            layout = "сутки" if svc.log_layout != "hourly" else "по часам"
+            lines.append(f"  • {svc.display_name} ({layout}) — {svc.service_dir}")
         self.lbl_services.setText("\n".join(lines) if lines else "  Нет микросервисов")
 
         up = config.get("upload") or {}

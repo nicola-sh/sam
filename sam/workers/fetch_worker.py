@@ -6,6 +6,7 @@ from typing import Any
 
 from sam.models.microservice import Microservice
 from sam.services.log_fetcher import LogFetcher
+from sam.services.ssh_client import SshEndpoint
 from sam.vault.store import SecretVault
 
 try:
@@ -28,7 +29,12 @@ class FetchWorker(QThread):
         export_dir: str,
         grep_value: str | None,
         vault: SecretVault | None,
+        *,
         label: str | None = None,
+        ssh_endpoint: SshEndpoint | None = None,
+        target_kind: str = "",
+        target_id: str = "",
+        host_id: str = "",
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -39,10 +45,14 @@ class FetchWorker(QThread):
         self.grep_value = grep_value
         self.vault = vault
         self.label = label
+        self.ssh_endpoint = ssh_endpoint
+        self.target_kind = target_kind
+        self.target_id = target_id
+        self.host_id = host_id
 
     def run(self) -> None:
         try:
-            fetcher = LogFetcher(self.config, self.vault)
+            fetcher = LogFetcher(self.config, self.vault, ssh_endpoint=self.ssh_endpoint)
             result = fetcher.fetch(
                 self.service,
                 self.dates,
@@ -51,6 +61,9 @@ class FetchWorker(QThread):
                 label=self.label,
                 log=self.log.emit,
                 cancel=self.isInterruptionRequested,
+                target_kind=self.target_kind,
+                target_id=self.target_id,
+                host_id=self.host_id,
             )
             if self.isInterruptionRequested():
                 self.cancelled.emit()
