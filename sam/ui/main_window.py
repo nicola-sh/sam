@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import subprocess
 import sys
-from datetime import date
+from datetime import date, time
 from pathlib import Path
 
 from sam.auth.session import SamUser
@@ -32,14 +32,16 @@ from sam.util.app_paths import (
 )
 from sam.util.archive_names import default_archive_basename, sanitize_archive_basename, archive_filename
 from sam.util.date_range import iter_dates
+from sam.services.time_filter import needs_time_filter
 from sam.services.zip_archive import ArchiveError, create_password_zip
 from sam.util.masking import mask_ipv4
+from sam.util.time_window import build_time_window
 from sam.vault.session import VaultSession
 from sam.vault.store import vault_path_from_config
-from sam.workers.fetch_worker import FetchWorker
+from sam.workers.fetch_worker import BatchFetchResult, FetchWorker
 
 try:
-    from PyQt6.QtCore import QDate, Qt
+    from PyQt6.QtCore import QDate, QTime, Qt
     from PyQt6.QtWidgets import (
         QApplication,
         QCheckBox,
@@ -50,8 +52,11 @@ try:
         QHBoxLayout,
         QLabel,
         QLineEdit,
+        QListWidget,
+        QListWidgetItem,
         QMainWindow,
         QMessageBox,
+        QTimeEdit,
         QPushButton,
         QTabWidget,
         QTextEdit,
@@ -61,7 +66,7 @@ try:
     _PYQT6 = True
 except ImportError:  # pragma: no cover
     _PYQT6 = False
-    from PyQt5.QtCore import QDate, Qt  # type: ignore
+    from PyQt5.QtCore import QDate, QTime, Qt  # type: ignore
     from PyQt5.QtWidgets import (  # type: ignore
         QApplication,
         QCheckBox,
@@ -72,14 +77,20 @@ except ImportError:  # pragma: no cover
         QHBoxLayout,
         QLabel,
         QLineEdit,
+        QListWidget,
+        QListWidgetItem,
         QMainWindow,
         QMessageBox,
         QPushButton,
         QTabWidget,
         QTextEdit,
+        QTimeEdit,
         QVBoxLayout,
         QWidget,
     )
+
+
+_USER_ROLE = _USER_ROLE if _PYQT6 else Qt.UserRole
 
 
 def run_qt_app(app: QApplication) -> int:
@@ -190,12 +201,21 @@ class MainWindow(QMainWindow):
         row_host.addWidget(self.host_combo, stretch=1)
         from_layout.addLayout(row_host)
 
-        row_svc = QHBoxLayout()
-        row_svc.addWidget(QLabel("Микросервис:"))
-        self.service_combo = QComboBox()
-        self.service_combo.setMinimumWidth(260)
-        row_svc.addWidget(self.service_combo, stretch=1)
-        from_layout.addLayout(row_svc)
+        svc_hint = QLabel(
+            "Отметьте один или несколько микросервисов (Ctrl+клик). "
+            "Время — для отсечения строк по метке времени в логе."
+        )
+        svc_hint.setObjectName("sectionHint")
+        svc_hint.setWordWrap(True)
+        from_layout.addWidget(svc_hint)
+
+        self.service_list = QListWidget()
+        self.service_list.setSelectionMode(
+            QListWidget.SelectionMode.ExtendedSelection
+        )
+        self.service_list.setMinimumHeight(72)
+        self.service_list.setMaximumHeight(140)
+        from_layout.addWidget(self.service_list)
 
         row_dates = QHBoxLayout()
         row_dates.addWidget(QLabel("Период:"))
@@ -205,12 +225,19 @@ class MainWindow(QMainWindow):
         self.date_from.setDisplayFormat("dd.MM.yyyy")
         self.date_from.setDate(QDate.currentDate())
         row_dates.addWidget(self.date_from)
+        self.time_from = QTimeEdit()
+        self.time_from.setDisplayFormat("HH:mm")
+        row_dates.addWidget(self.time_from)
         row_dates.addWidget(QLabel("по"))
         self.date_to = QDateEdit()
         self.date_to.setCalendarPopup(True)
         self.date_to.setDisplayFormat("dd.MM.yyyy")
         self.date_to.setDate(QDate.currentDate())
         row_dates.addWidget(self.date_to)
+        self.time_to = QTimeEdit()
+        self.time_to.setDisplayFormat("HH:mm")
+        self.time_to.setTime(QTime(23, 59))
+        row_dates.addWidget(self.time_to)
         row_dates.addStretch()
         from_layout.addLayout(row_dates)
 
@@ -345,7 +372,7 @@ class MainWindow(QMainWindow):
             "<b>Как это работает</b><br><br>"
             "1. Вкладка <b>«Подключения»</b> — укажите сервер, с которого читать логи, "
             "микросервисы и пути (файл vault).<br>"
-            "2. Вкладка <b>«Скачивание логов»</b> — выберите микросервис, дату, "
+            "2. Вкладка <b>«Скачивание логов»</b> — кластер/сервер, микросервисы (несколько), период с временем, "
             "при необходимости текст для grep.<br>"
             "3. Блок <b>«Куда сохранить»</b> — папка на вашем ПК.<br><br>"
             "<b>Файлы</b><br>"
@@ -445,10 +472,12 @@ class MainWindow(QMainWindow):
 
     def _reload_services(self) -> None:
         kind, sid = self._current_source()
-        self.service_combo.clear()
+        self.service_list.clear()
         for svc in microservices_for_source(self.config, kind, sid):
             layout = "сутки" if svc.log_layout != "hourly" else "по часам"
-            self.service_combo.addItem(f"{svc.display_name} ({layout})", svc.id)
+            item = QListWidgetItem(f"{svc.display_name} ({layout})")
+            item.setData(_USER_ROLE, svc.id)
+            self.service_list.addItem(item)
 
     def _edit_infrastructure(self) -> None:
         dlg = InfrastructureDialog(
@@ -491,8 +520,20 @@ class MainWindow(QMainWindow):
         qd = widget.date()
         return date(qd.year(), qd.month(), qd.day())
 
+    def _qtime_to_py(self, widget: QTimeEdit) -> time:
+        qt = widget.time()
+        return time(qt.hour(), qt.minute(), qt.second())
+
+    def _selected_service_ids(self) -> list[str]:
+        ids: list[str] = []
+        for item in self.service_list.selectedItems():
+            sid = item.data(Qt.ItemDataRole.UserRole)
+            if sid:
+                ids.append(str(sid))
+        return ids
+
     def _start_fetch(self) -> None:
-        if self.service_combo.count() == 0:
+        if self.service_list.count() == 0:
             QMessageBox.warning(
                 self,
                 "SAM",
@@ -501,9 +542,21 @@ class MainWindow(QMainWindow):
             )
             self.tabs.setCurrentWidget(self.connections_panel)
             return
-        service_id = self.service_combo.currentData()
-        service = microservice_by_id(self.config, service_id)
-        if service is None:
+        service_ids = self._selected_service_ids()
+        if not service_ids:
+            QMessageBox.warning(
+                self,
+                "SAM",
+                "Выберите хотя бы один микросервис в списке "
+                "(Ctrl+клик для нескольких).",
+            )
+            return
+        services = []
+        for sid in service_ids:
+            svc = microservice_by_id(self.config, sid)
+            if svc is not None:
+                services.append(svc)
+        if not services:
             return
 
         grep = None
@@ -515,10 +568,16 @@ class MainWindow(QMainWindow):
                 return
             label = grep
 
-        dates = iter_dates(self._qdate_to_py(self.date_from), self._qdate_to_py(self.date_to))
+        d_from = self._qdate_to_py(self.date_from)
+        d_to = self._qdate_to_py(self.date_to)
+        t_from = self._qtime_to_py(self.time_from)
+        t_to = self._qtime_to_py(self.time_to)
+        dates = iter_dates(d_from, d_to)
         if len(dates) > 31:
             QMessageBox.warning(self, "SAM", "Не более 31 дня за один раз.")
             return
+        time_window = build_time_window(d_from, d_to, t_from, t_to)
+        apply_time_filter = needs_time_filter(t_from, t_to)
 
         export = self.dir_edit.text().strip()
         if not export:
@@ -550,9 +609,12 @@ class MainWindow(QMainWindow):
             "log.fetch.start",
             user=self.user.login,
             status="ok",
-            service_id=service.id,
+            service_ids=[s.id for s in services],
             date_from=str(dates[0]),
             date_to=str(dates[-1]),
+            time_from=t_from.isoformat(timespec="minutes"),
+            time_to=t_to.isoformat(timespec="minutes"),
+            time_filter=apply_time_filter,
             grep_enabled=bool(grep),
             days=len(dates),
             archive_enabled=self.chk_archive.isChecked(),
@@ -566,7 +628,7 @@ class MainWindow(QMainWindow):
         vault = self.vault_session.vault if self.vault_session.is_unlocked else None
         self.worker = FetchWorker(
             self.config,
-            service,
+            services,
             dates,
             export,
             grep,
@@ -576,6 +638,8 @@ class MainWindow(QMainWindow):
             target_kind=kind,
             target_id=sid,
             host_id=host_id or "",
+            time_window=time_window,
+            apply_time_filter=apply_time_filter,
             parent=self,
         )
         self.worker.log.connect(self._append_log)
@@ -589,7 +653,7 @@ class MainWindow(QMainWindow):
             self.worker.requestInterruption()
             self.audit.record("log.fetch.cancel", user=self.user.login, status="ok")
 
-    def _on_finished(self, result) -> None:
+    def _on_finished(self, result: BatchFetchResult) -> None:
         self.btn_fetch.setEnabled(True)
         self.btn_cancel.setEnabled(False)
         self.audit.record(
@@ -597,7 +661,7 @@ class MainWindow(QMainWindow):
             user=self.user.login,
             status="ok",
             files=len(result.files),
-            service_id=result.service_id,
+            service_ids=result.service_ids,
         )
         if not result.files:
             QMessageBox.information(self, "SAM", "Совпадений не найдено.")

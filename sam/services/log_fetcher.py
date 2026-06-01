@@ -12,7 +12,9 @@ from sam.models.microservice import Microservice
 from sam.models.topology import legacy_ssh_endpoint
 from sam.services.remote_commands import commands_for_output
 from sam.services.ssh_client import SshEndpoint, connect, stream_command
+from sam.services.time_filter import filter_log_bytes
 from sam.util.dates import formats_for_day
+from sam.util.time_window import TimeWindow
 from sam.util.masking import mask_ipv4
 from sam.util.output_names import output_file_path, safe_label
 from sam.vault.store import SecretVault
@@ -80,6 +82,8 @@ class LogFetcher:
         target_kind: str = "",
         target_id: str = "",
         host_id: str = "",
+        time_window: TimeWindow | None = None,
+        apply_time_filter: bool = False,
     ) -> FetchResult:
         def _log(msg: str) -> None:
             if log:
@@ -130,6 +134,11 @@ class LogFetcher:
                     )
                     local_path.parent.mkdir(parents=True, exist_ok=True)
                     local_path.write_text("", encoding="utf-8")
+                    day_win = (
+                        time_window.slice_for_day(day)
+                        if time_window and apply_time_filter
+                        else None
+                    )
                     lines = self._collect_output(
                         client,
                         service,
@@ -138,6 +147,7 @@ class LogFetcher:
                         grep,
                         local_path,
                         _log,
+                        day_window=day_win,
                     )
                     result.line_counts[key] = lines
                     if lines > 0:
@@ -163,6 +173,8 @@ class LogFetcher:
         grep_value: str | None,
         local_path: Path,
         log: LogCallback,
+        *,
+        day_window: TimeWindow | None = None,
     ) -> int:
         total_lines = 0
         steps = commands_for_output(service, output, formats, grep_value)
@@ -181,10 +193,13 @@ class LogFetcher:
                 if code not in (0, 1):
                     log(f"      код выхода: {code}")
                 if data:
-                    out_fh.write(data)
-                    if not data.endswith(b"\n"):
-                        out_fh.write(b"\n")
-                    total_lines += data.count(b"\n")
+                    if day_window is not None:
+                        data = filter_log_bytes(data, day_window)
+                    if data:
+                        out_fh.write(data)
+                        if not data.endswith(b"\n"):
+                            out_fh.write(b"\n")
+                        total_lines += data.count(b"\n")
         return total_lines
 
     def _upload_files(self, paths: list[Path], log: LogCallback) -> list[str]:
