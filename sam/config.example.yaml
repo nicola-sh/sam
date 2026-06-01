@@ -1,0 +1,27 @@
+# Пример конфигурации SAM (скопируйте в sam_app_data/config.yaml или sam/config.yaml)
+# Пароли не коммитьте — используйте sam_app_data/config.yaml на рабочей машине.
+
+sam:
+  last_export_dir: ""
+
+# SSH на хост, где доступны пути /srv_mproc/... (как в atm-ddc-logs.sh)
+ssh:
+  host: "10.11.44.10"
+  port: 22
+  username: "shirnin_nv"
+  password: ""
+  key_filename: ""
+
+atm_ddc:
+  service_dir: "/srv_mproc/mproc/services/atm-ddc-service"
+  arch_subdir: "/log_arch"
+  main_subdir: "/log"
+
+# Опционально: загрузить собранные файлы на другой хост (scp из скрипта)
+upload:
+  enabled: false
+  host: "10.11.44.10"
+  port: 22
+  username: "shirnin_nv"
+  password: ""
+  remote_dir: "/home/BELINVESTBANK/shirnin_nv"

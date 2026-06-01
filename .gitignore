@@ -7,4 +7,6 @@ dist/
 build/
 *.spec
 regcon-output/
+sam_app_data/
+regcon_app_data/
 data/tmp/
