@@ -34,7 +34,7 @@ from sam.util.app_paths import (
 from sam.util.archive_names import default_archive_basename, sanitize_archive_basename, archive_filename
 from sam.util.date_range import iter_dates
 from sam.services.time_filter import needs_time_filter
-from sam.services.zip_archive import ArchiveError, create_password_zip
+from sam.services.zip_archive import ArchiveError, aes_zip_available, create_password_zip
 from sam.util.masking import mask_ipv4
 from sam.util.time_window import build_time_window
 from sam.vault.session import VaultSession
@@ -131,6 +131,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"{title} — {user.display_name}")
         self.resize(820, 620)
         self.worker: FetchWorker | None = None
+        self._aes_zip = aes_zip_available()
         last = str(sam.get("last_export_dir") or "").strip()
         self.export_dir = last if last and Path(last).is_dir() else str(default_export_dir())
         self._build_ui()
@@ -285,13 +286,19 @@ class MainWindow(QMainWindow):
         arch_box = QGroupBox("Архив с паролем (опционально)")
         arch_layout = QVBoxLayout(arch_box)
         arch_hint = QLabel(
-            "После скачивания собрать файлы в ZIP с паролем (AES). "
-            "Имя по умолчанию: log_ММДД-ЧЧММ, например log_0601-1053."
+            "После скачивания собрать файлы в ZIP. "
+            "Пароль (AES) — если установлен pyzipper из DATA\\wheels. "
+            "Имя: log_ММДД-ЧЧММ."
         )
         arch_hint.setObjectName("sectionHint")
         arch_hint.setWordWrap(True)
         arch_layout.addWidget(arch_hint)
-        self.chk_archive = QCheckBox("Создать ZIP-архив с паролем")
+        arch_label = (
+            "Создать ZIP-архив с паролем (AES)"
+            if self._aes_zip
+            else "Создать ZIP-архив"
+        )
+        self.chk_archive = QCheckBox(arch_label)
         self.chk_archive.toggled.connect(self._on_archive_toggled)
         arch_layout.addWidget(self.chk_archive)
         row_arch_name = QHBoxLayout()
@@ -682,7 +689,7 @@ class MainWindow(QMainWindow):
         msg = f"Сохранено файлов: {len(result.files)}"
         want_arch, base_name, arch_pwd = self._archive_options()
         if want_arch:
-            if not arch_pwd:
+            if self._aes_zip and not arch_pwd:
                 QMessageBox.warning(self, "SAM", "Укажите пароль для архива.")
                 return
             export_dir = Path(self.dir_edit.text().strip())

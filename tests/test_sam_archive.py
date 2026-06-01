@@ -37,3 +37,17 @@ def test_create_password_zip(tmp_path: Path):
     with __import__("pyzipper").AESZipFile(out) as zf:
         zf.setpassword(b"secret")
         assert zf.namelist() == ["a.txt"]
+
+def test_create_plain_zip_without_pyzipper(tmp_path: Path, monkeypatch):
+  from sam.services import zip_archive as za
+
+  monkeypatch.setattr(za, "aes_zip_available", lambda: False)
+  f1 = tmp_path / "a.txt"
+  f1.write_text("line1\n", encoding="utf-8")
+  out = tmp_path / "log.zip"
+  za.create_password_zip([f1], output_path=out, password="")
+  import zipfile
+
+  with zipfile.ZipFile(out) as zf:
+    assert zf.namelist() == ["a.txt"]
+
