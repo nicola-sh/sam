@@ -1,5 +1,5 @@
-from regcon.models import Finding
-from regcon.util.finding_groups import build_finding_groups, flatten_selected, group_key
+from sam.regcon.models import Finding
+from sam.regcon.util.finding_groups import build_finding_groups, flatten_selected, group_key
 
 
 def _finding(

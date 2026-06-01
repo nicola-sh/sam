@@ -1,6 +1,6 @@
-from regcon.models import Finding
-from regcon.util.finding_groups import FindingGroup
-from regcon.util.mask_preview import format_group_preview, preview_masked_value
+from sam.regcon.models import Finding
+from sam.regcon.util.finding_groups import FindingGroup
+from sam.regcon.util.mask_preview import format_group_preview, preview_masked_value
 
 
 def test_preview_pan_masks_middle():

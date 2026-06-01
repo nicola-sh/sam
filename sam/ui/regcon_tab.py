@@ -32,8 +32,8 @@ class RegConTabHost(QWidget):
         if self._loaded:
             return
         self._loaded = True
-        from regcon.ui.main_window import RegConWidget
-        from regcon.ui.styles import APP_STYLESHEET as REGCON_STYLES
+        from sam.regcon.ui.main_window import RegConWidget
+        from sam.regcon.ui.styles import APP_STYLESHEET as REGCON_STYLES
 
         try:
             from PyQt6.QtWidgets import QApplication

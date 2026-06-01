@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from regcon.util.pan_prefix_index import PanPrefixIndex
-from regcon.util.paths import normalize_file_path, path_lookup_key
+from sam.regcon.util.pan_prefix_index import PanPrefixIndex
+from sam.regcon.util.paths import normalize_file_path, path_lookup_key
 
 
 def test_path_lookup_windows_case(tmp_path, monkeypatch):

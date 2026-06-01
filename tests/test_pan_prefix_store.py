@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from regcon.util import pan_prefix_store as store
+from sam.regcon.util import pan_prefix_store as store
 
 
 @pytest.fixture
