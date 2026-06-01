@@ -1,6 +1,6 @@
-from regcon.models import Finding
-from regcon.services.audit import write_audit
-from regcon.util.privacy import redact_sensitive_text, sanitize_audit_details, wipe_findings
+from sam.regcon.models import Finding
+from sam.regcon.services.audit import write_audit
+from sam.regcon.util.privacy import redact_sensitive_text, sanitize_audit_details, wipe_findings
 
 
 def test_redact_pan_in_log_line():
@@ -11,7 +11,7 @@ def test_redact_pan_in_log_line():
 
 
 def test_audit_sanitizes_details(tmp_path, monkeypatch):
-    from regcon.util import app_paths as paths_mod
+    from sam.regcon.util import app_paths as paths_mod
 
     data = tmp_path / "data"
     data.mkdir()

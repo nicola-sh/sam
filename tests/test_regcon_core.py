@@ -1,11 +1,11 @@
 from pathlib import Path
 
-from regcon.config.pan_prefixes import load_prefixes, load_prefixes_from_text
-from regcon.detectors.pan import PanDetector, is_plausible_pan, luhn_valid
-from regcon.maskers.masker import apply_replacements, findings_to_replacements, mask_pan_text
-from regcon.models import Finding
-from regcon.util.context import split_context
-from regcon.util.pan_prefix_index import PanPrefixIndex
+from sam.regcon.config.pan_prefixes import load_prefixes, load_prefixes_from_text
+from sam.regcon.detectors.pan import PanDetector, is_plausible_pan, luhn_valid
+from sam.regcon.maskers.masker import apply_replacements, findings_to_replacements, mask_pan_text
+from sam.regcon.models import Finding
+from sam.regcon.util.context import split_context
+from sam.regcon.util.pan_prefix_index import PanPrefixIndex
 
 
 def test_luhn_valid_card():
@@ -30,7 +30,7 @@ def test_context_30_chars():
 
 
 def test_load_prefixes_from_store(tmp_path, monkeypatch):
-    from regcon.util import pan_prefix_store as store
+    from sam.regcon.util import pan_prefix_store as store
 
     path = tmp_path / "pan_prefix.yaml"
     monkeypatch.setattr(store, "pan_prefix_path", lambda: path)
@@ -57,7 +57,7 @@ def test_prefix_index_tab_separated():
 
 
 def test_prefix_filter_skips_unknown_bin(tmp_path, monkeypatch):
-    from regcon.util import pan_prefix_store as store
+    from sam.regcon.util import pan_prefix_store as store
 
     path = tmp_path / "pan_prefix.yaml"
     monkeypatch.setattr(store, "pan_prefix_path", lambda: path)
@@ -75,7 +75,7 @@ def test_prefix_filter_skips_unknown_bin(tmp_path, monkeypatch):
 
 
 def test_detector_finds_configured_prefix(tmp_path, monkeypatch):
-    from regcon.util import pan_prefix_store as store
+    from sam.regcon.util import pan_prefix_store as store
 
     path = tmp_path / "pan_prefix.yaml"
     monkeypatch.setattr(store, "pan_prefix_path", lambda: path)
