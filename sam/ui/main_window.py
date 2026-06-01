@@ -21,6 +21,7 @@ from sam.models.topology import (
     resolve_ssh_endpoint,
 )
 from sam.ui.connections_panel import ConnectionsPanel
+from sam.ui.regcon_tab import RegConTabHost
 from sam.ui.infrastructure_dialog import InfrastructureDialog
 from sam.ui.styles import APP_STYLESHEET
 from sam.ui.users_dialog import UsersDialog
@@ -159,7 +160,13 @@ class MainWindow(QMainWindow):
         root.addLayout(header)
 
         self.tabs = QTabWidget()
-        self.tabs.addTab(self._build_download_tab(), "Скачивание логов")
+        self.tabs.addTab(self._build_download_tab(), "Скачивание")
+        self._regcon_host = RegConTabHost(
+            export_dir_provider=lambda: self.dir_edit.text().strip(),
+            parent=self,
+        )
+        self.tabs.addTab(self._regcon_host, "Обезличивание")
+        self.tabs.currentChanged.connect(self._on_tab_changed)
         self.connections_panel = ConnectionsPanel(
             is_admin=self.user.is_admin,
             on_edit=self._edit_infrastructure,
@@ -332,8 +339,13 @@ class MainWindow(QMainWindow):
         btn_open = QPushButton("Открыть папку")
         btn_open.setObjectName("secondaryBtn")
         btn_open.clicked.connect(self._open_export_dir)
+        btn_regcon = QPushButton("Обезличивание →")
+        btn_regcon.setObjectName("secondaryBtn")
+        btn_regcon.setToolTip("Открыть вкладку RegCon с папкой выгрузки")
+        btn_regcon.clicked.connect(self._goto_regcon)
         actions.addWidget(self.btn_fetch)
         actions.addWidget(self.btn_cancel)
+        actions.addWidget(btn_regcon)
         actions.addStretch()
         actions.addWidget(btn_open)
         layout.addLayout(actions)
@@ -372,7 +384,7 @@ class MainWindow(QMainWindow):
             "<b>Как это работает</b><br><br>"
             "1. Вкладка <b>«Подключения»</b> — укажите сервер, с которого читать логи, "
             "микросервисы и пути (файл vault).<br>"
-            "2. Вкладка <b>«Скачивание логов»</b> — кластер/сервер, микросервисы (несколько), период с временем, "
+            "2. <b>«Скачивание»</b> — логи с серверов; <b>«Обезличивание»</b> — RegCon (PAN, IP, пароли) по локальным файлам. "
             "при необходимости текст для grep.<br>"
             "3. Блок <b>«Куда сохранить»</b> — папка на вашем ПК.<br><br>"
             "<b>Файлы</b><br>"
