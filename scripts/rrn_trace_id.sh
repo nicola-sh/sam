@@ -7,12 +7,15 @@
 #   пример: [switch-service, 7a1b..., 9c2d...]
 #
 # Использование:
-#   ./rrn_trace_id.sh RRN [YYYY-MM-DD] [PART]
+#   ./rrn_trace_id.sh RRN [YYYY-MM-DD|now] [PART]
 #   ./rrn_trace_id.sh 611947394858 2026-04-29
-#   ./rrn_trace_id.sh 611947394858 2026-04-29 01
+#   ./rrn_trace_id.sh 611947394858 now
+#   ./rrn_trace_id.sh 611947394858 now 01
 #   ./rrn_trace_id.sh 611947394858 2026-04-29 01,02,03
 #
-# PART — суффикс файла вместо * в имени архива:
+# now — текущие .log в каталоге log/ (без log_arch/*.gz)
+#
+# PART — суффикс файла вместо * в имени лога:
 #   * или пусто  → switch-service.2026-04-29_*.gz  (все части)
 #   01           → switch-service.2026-04-29_01.gz (один файл)
 #   01,02        → несколько конкретных частей
@@ -21,6 +24,7 @@
 #   LOG_ROOT          — корень логов (по умолчанию /srv_mproc/mproc/services)
 #   TARGET_DIR        — куда писать результат (по умолчанию $HOME/logs)
 #   LOG_PART          — то же, что аргумент PART (если PART не задан)
+#   LOG_SOURCE        — archive (по умолчанию) или now
 #   SCAN_MODE              — fast (по умолчанию) или full
 #   CONTEXT_BEFORE         — строк до RRN в фазе 1 (по умолчанию 80)
 #   CONTEXT_AFTER          — строк после RRN в фазе 1 (по умолчанию 40)
@@ -39,13 +43,18 @@ DATE="${2:-}"
 LOG_PART_ARG="${3:-}"
 
 if [[ -z "$RRN" ]]; then
-  echo "Использование: $0 RRN [YYYY-MM-DD] [PART]" >&2
+  echo "Использование: $0 RRN [YYYY-MM-DD|now] [PART]" >&2
+  echo "  now  — только .log в log/ (текущие логи)" >&2
   echo "  PART: * | 01 | 01,02,03  (суффикс вместо _* в имени лога)" >&2
   exit 1
 fi
 
+LOG_SOURCE="${LOG_SOURCE:-archive}"
 if [[ -z "$DATE" ]]; then
   DATE="$(date +%F)"
+elif [[ "${DATE,,}" == "now" ]]; then
+  DATE="$(date +%F)"
+  LOG_SOURCE=now
 fi
 
 LOG_ROOT="${LOG_ROOT:-/srv_mproc/mproc/services}"
@@ -61,19 +70,22 @@ TRACE_CONTEXT_BEFORE="${TRACE_CONTEXT_BEFORE:-120}"
 TRACE_CONTEXT_AFTER="${TRACE_CONTEXT_AFTER:-60}"
 RRN_HIT_FILES=()
 
-# Пути к архивам логов (PART подставляется вместо * в _PART.gz / _PART.log)
+# Пути к логам: archive → log_arch/*.gz | now → log/*.log
 SEARCH_PATTERNS=()
 
 add_patterns_for_suffix() {
   local suffix="$1"
-  SEARCH_PATTERNS+=(
-    "${LOG_ROOT}/switch-service/log_arch/switch-service.${DATE}_${suffix}.gz"
-    "${LOG_ROOT}/stip-service/log_arch/stip-service.${DATE}_${suffix}.gz"
-    "${LOG_ROOT}/switch-service/log/switch-service.${DATE}_${suffix}.log"
-    "${LOG_ROOT}/switch-service/log_arch/switch-service.${DATE}_${suffix}.log"
-    "${LOG_ROOT}/stip-service/log/stip-service.${DATE}_${suffix}.log"
-    "${LOG_ROOT}/stip-service/log_arch/stip-service.${DATE}_${suffix}.log"
-  )
+  if [[ "$LOG_SOURCE" == "now" ]]; then
+    SEARCH_PATTERNS+=(
+      "${LOG_ROOT}/switch-service/log/switch-service.${DATE}_${suffix}.log"
+      "${LOG_ROOT}/stip-service/log/stip-service.${DATE}_${suffix}.log"
+    )
+  else
+    SEARCH_PATTERNS+=(
+      "${LOG_ROOT}/switch-service/log_arch/switch-service.${DATE}_${suffix}.gz"
+      "${LOG_ROOT}/stip-service/log_arch/stip-service.${DATE}_${suffix}.gz"
+    )
+  fi
 }
 
 if [[ -z "$LOG_PART" || "$LOG_PART" == "*" ]]; then
@@ -162,6 +174,7 @@ fi
 
 echo "RRN: ${RRN}"
 echo "Дата: ${DATE}"
+echo "Источник: ${LOG_SOURCE} ($([[ "$LOG_SOURCE" == "now" ]] && echo 'log/*.log' || echo 'log_arch/*.gz'))"
 echo "Часть лога (PART): ${LOG_PART}"
 echo "Файлов: ${#VALID_FILES[@]}"
 echo "Режим сканирования: ${SCAN_MODE}"
