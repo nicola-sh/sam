@@ -335,64 +335,111 @@ while IFS=$'\t' read -r t1 t2 svc; do
 done <"$PAIRS_FILE"
 
 # -----------------------------------------------------------------------------
-# Фаза 2: по каждой паре собрать блоки ARR1 (оба trace) и ARR2 (только trace_2)
+# Фаза 2: один проход по каждому файлу для ВСЕХ пар trace (не зависает без вывода)
 # -----------------------------------------------------------------------------
-collect_blocks_awk='
-function trim(s) {
-  gsub(/^[ \t\r\n]+|[ \t\r\n]+$/, "", s)
-  return s
+TRACE_IDS_FILE="${TMP_DIR}/trace_ids.txt"
+TRACE_IDS_T2_FILE="${TMP_DIR}/trace_ids_t2.txt"
+cut -f1,2 "$PAIRS_FILE" | tr '\t' '\n' | sort -u >"$TRACE_IDS_FILE"
+cut -f2 "$PAIRS_FILE" | sort -u >"$TRACE_IDS_T2_FILE"
+
+pair_idx=0
+while IFS=$'\t' read -r _ _ _; do
+  pair_idx=$((pair_idx + 1))
+  : >"${TMP_DIR}/pair_${pair_idx}.tmp"
+done <"$PAIRS_FILE"
+
+grep_ids_context() {
+  local ids_file="$1"
+  local before="$2"
+  local after="$3"
+  local f="$4"
+  if [[ "$f" == *.gz ]]; then
+    zgrep -F -B "$before" -A "$after" -f "$ids_file" -- "$f" 2>/dev/null || true
+  else
+    grep -F -B "$before" -A "$after" -f "$ids_file" -- "$f" 2>/dev/null || true
+  fi
 }
-function flush_block(b,   has_t1, has_t2) {
+
+file_contains_any_id() {
+  local ids_file="$1"
+  local f="$2"
+  if [[ "$f" == *.gz ]]; then
+    zgrep -q -F -f "$ids_file" -- "$f" 2>/dev/null
+  else
+    grep -q -F -f "$ids_file" -- "$f" 2>/dev/null
+  fi
+}
+
+collect_all_pairs_block_awk='
+function classify_block(b,   i, has_t1, has_t2, out) {
   if (b == "") return
-  has_t1 = (index(b, t1) > 0)
-  has_t2 = (index(b, t2) > 0)
-  if (has_t1 && has_t2) {
-    print "ARR1\t" fname "\n" b "\n---E---\n" >> out_file
-  } else if (has_t2) {
-    print "ARR2\t" fname "\n" b "\n---E---\n" >> out_file
+  for (i = 1; i <= n; i++) {
+    has_t1 = (index(b, t1[i]) > 0)
+    has_t2 = (index(b, t2[i]) > 0)
+    out = tmp_dir "/pair_" i ".tmp"
+    if (has_t1 && has_t2) {
+      print "ARR1\t" fname "\n" b "\n---E---\n" >> out
+    } else if (has_t2) {
+      print "ARR2\t" fname "\n" b "\n---E---\n" >> out
+    }
   }
 }
 BEGIN {
-  t1 = ENVIRON["T1"]
-  t2 = ENVIRON["T2"]
+  tmp_dir = ENVIRON["TMP_DIR"]
   fname = ENVIRON["FNAME"]
-  out_file = ENVIRON["OUT_TMP"]
+  n = 0
+  while ((getline line < ENVIRON["PAIRS_FILE"]) > 0) {
+    split(line, p, "\t")
+    n++
+    t1[n] = p[1]
+    t2[n] = p[2]
+  }
+  close(ENVIRON["PAIRS_FILE"])
   b = ""
 }
 {
   line = $0
   if (line ~ /^---E---[[:space:]]*$/) {
-    flush_block(b)
+    classify_block(b)
     b = ""
     next
   }
   if (line ~ /^[[:space:]]*$/ && b != "") {
-    flush_block(b)
+    classify_block(b)
     b = ""
     next
   }
   if (b == "") b = line
   else b = b "\n" line
 }
-END { flush_block(b) }
+END { classify_block(b) }
 '
 
-collect_blocks_fast_awk='
-function classify_chunk(chunk,   has_t1, has_t2) {
+collect_all_pairs_chunk_awk='
+function classify_chunk(chunk,   i, has_t1, has_t2, out) {
   if (chunk == "") return
-  has_t1 = (index(chunk, t1) > 0)
-  has_t2 = (index(chunk, t2) > 0)
-  if (has_t1 && has_t2) {
-    print "ARR1\t" fname "\n" chunk "\n---E---\n" >> out_file
-  } else if (has_t2) {
-    print "ARR2\t" fname "\n" chunk "\n---E---\n" >> out_file
+  for (i = 1; i <= n; i++) {
+    has_t1 = (index(chunk, t1[i]) > 0)
+    has_t2 = (index(chunk, t2[i]) > 0)
+    out = tmp_dir "/pair_" i ".tmp"
+    if (has_t1 && has_t2) {
+      print "ARR1\t" fname "\n" chunk "\n---E---\n" >> out
+    } else if (has_t2) {
+      print "ARR2\t" fname "\n" chunk "\n---E---\n" >> out
+    }
   }
 }
 BEGIN {
-  t1 = ENVIRON["T1"]
-  t2 = ENVIRON["T2"]
+  tmp_dir = ENVIRON["TMP_DIR"]
   fname = ENVIRON["FNAME"]
-  out_file = ENVIRON["OUT_TMP"]
+  n = 0
+  while ((getline line < ENVIRON["PAIRS_FILE"]) > 0) {
+    split(line, p, "\t")
+    n++
+    t1[n] = p[1]
+    t2[n] = p[2]
+  }
+  close(ENVIRON["PAIRS_FILE"])
   chunk = ""
 }
 {
@@ -406,43 +453,33 @@ BEGIN {
 END { classify_chunk(chunk) }
 '
 
-collect_trace_context() {
-  local t1="$1" t2="$2" f="$3"
-  grep_text_context "$t2" "$TRACE_CONTEXT_BEFORE" "$TRACE_CONTEXT_AFTER" "$f"
-  if [[ "$SCAN_MODE" == "fast" ]] && ! file_contains_text "$t1" "$f"; then
-    return 0
+PHASE2_TOTAL=${#PHASE2_FILES[@]}
+PHASE2_IDX=0
+echo "  [2/3] сбор блоков: ${PAIR_COUNT} пар × ${PHASE2_TOTAL} файлов (один проход на файл)"
+
+for f in "${PHASE2_FILES[@]}"; do
+  PHASE2_IDX=$((PHASE2_IDX + 1))
+  base="$(basename "$f")"
+  echo "  [2/3] ${PHASE2_IDX}/${PHASE2_TOTAL}: ${base} ..."
+
+  if ! file_contains_any_id "$TRACE_IDS_T2_FILE" "$f"; then
+    echo "         пропуск (нет trace_id2)"
+    continue
   fi
-  if [[ "$SCAN_MODE" == "fast" ]]; then
-    grep_text_context "$t1" "$TRACE_CONTEXT_BEFORE" "$TRACE_CONTEXT_AFTER" "$f"
-  fi
-}
 
-pair_idx=0
-while IFS=$'\t' read -r TRACE_1 TRACE_2 SERVICE_NAME; do
-  pair_idx=$((pair_idx + 1))
-  OUT_TMP="${TMP_DIR}/pair_${pair_idx}.tmp"
-  : >"$OUT_TMP"
-  echo "  [2/3] пара #${pair_idx} [${SERVICE_NAME}]: ${TRACE_1} | ${TRACE_2}"
-
-  for f in "${PHASE2_FILES[@]}"; do
-    base="$(basename "$f")"
-    if ! file_contains_text "$TRACE_2" "$f"; then
-      continue
-    fi
-
-    export T1="$TRACE_1" T2="$TRACE_2" FNAME="$f" OUT_TMP="$OUT_TMP"
-    if [[ "$SCAN_MODE" == "full" ]]; then
-      echo "      full: ${base}"
-      if [[ "$f" == *.gz ]]; then
-        zcat -- "$f" | awk "$collect_blocks_awk"
-      else
-        awk "$collect_blocks_awk" "$f"
-      fi
+  export TMP_DIR FNAME="$f" PAIRS_FILE
+  if [[ "$SCAN_MODE" == "full" ]]; then
+    if [[ "$f" == *.gz ]]; then
+      zcat -- "$f" | awk "$collect_all_pairs_block_awk"
     else
-      collect_trace_context "$TRACE_1" "$TRACE_2" "$f" | awk "$collect_blocks_fast_awk"
+      awk "$collect_all_pairs_block_awk" "$f"
     fi
-  done
-done <"$PAIRS_FILE"
+  else
+    grep_ids_context "$TRACE_IDS_FILE" "$TRACE_CONTEXT_BEFORE" "$TRACE_CONTEXT_AFTER" "$f" \
+      | awk "$collect_all_pairs_chunk_awk"
+  fi
+  echo "         готово"
+done
 
 TMP_COUNT=$(find "$TMP_DIR" -maxdepth 1 -name 'pair_*.tmp' -size +0c 2>/dev/null | wc -l | tr -d ' ')
 if [[ "$TMP_COUNT" -eq 0 ]]; then
