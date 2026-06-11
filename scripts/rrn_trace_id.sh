@@ -356,10 +356,11 @@ done <"$PAIRS_FILE"
 # следующей даты относится к этому trace.
 extract_trace_segments_awk='
 function is_date_line(s) {
-  return s ~ /^[0-9]{4}-[0-9]{2}-[0-9]{2}[ T]/ ||
-         s ~ /^[0-9]{2}\.[0-9]{2}\.[0-9]{4}/ ||
-         s ~ /^[0-9]{4}\.[0-9]{2}\.[0-9]{2}/ ||
-         s ~ /^[0-9]{2}\/[0-9]{2}\/[0-9]{4}/
+  # дата в начале строки (допускаем пробелы; запятая/точка перед миллисекундами)
+  return s ~ /^[[:space:]]*[0-9]{4}-[0-9]{2}-[0-9]{2}[ T.,]/ ||
+         s ~ /^[[:space:]]*[0-9]{2}\.[0-9]{2}\.[0-9]{4}/ ||
+         s ~ /^[[:space:]]*[0-9]{4}\.[0-9]{2}\.[0-9]{2}/ ||
+         s ~ /^[[:space:]]*[0-9]{2}\/[0-9]{2}\/[0-9]{4}/
 }
 function out_path(i) {
   return tmp_dir "/pair_" i ".tmp"
@@ -393,6 +394,9 @@ BEGIN {
 }
 {
   line = $0
+  is_dt = 0
+  has_trace = 0
+  i = 0
 
   if (line ~ /^---E---[[:space:]]*$/) {
     flush_all()
@@ -401,20 +405,34 @@ BEGIN {
   }
 
   if (is_date_line(line)) {
+    is_dt = 1
     flush_all()
-    pending_date = line
-    next
   }
 
   for (i = 1; i <= n; i++) {
-    if (!capturing[i] && line_matches_trace(line, i)) {
-      capturing[i] = 1
-      buf[i] = (pending_date != "" ? pending_date "\n" : "") line
-      pending_date = ""
+    if (line_matches_trace(line, i)) has_trace = 1
+  }
+
+  for (i = 1; i <= n; i++) {
+    if (line_matches_trace(line, i)) {
+      if (!capturing[i]) {
+        capturing[i] = 1
+        if (pending_date != "" && pending_date != line)
+          buf[i] = pending_date "\n" line
+        else
+          buf[i] = line
+      } else {
+        buf[i] = buf[i] "\n" line
+      }
     } else if (capturing[i]) {
       buf[i] = buf[i] "\n" line
     }
   }
+
+  if (is_dt && !has_trace)
+    pending_date = line
+  else if (has_trace)
+    pending_date = ""
 }
 END { flush_all() }
 '
