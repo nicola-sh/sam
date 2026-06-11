@@ -7,13 +7,23 @@
 #   пример: [switch-service, 7a1b..., 9c2d...]
 #
 # Использование:
-#   ./rrn_trace_id.sh RRN [YYYY-MM-DD]
+#   ./rrn_trace_id.sh RRN [YYYY-MM-DD] [PART]
 #   ./rrn_trace_id.sh 611947394858 2026-04-29
+#   ./rrn_trace_id.sh 611947394858 2026-04-29 01
+#   ./rrn_trace_id.sh 611947394858 2026-04-29 01,02,03
+#
+# PART — суффикс файла вместо * в имени архива:
+#   * или пусто  → switch-service.2026-04-29_*.gz  (все части)
+#   01           → switch-service.2026-04-29_01.gz (один файл)
+#   01,02        → несколько конкретных частей
 #
 # Переменные окружения (опционально):
-#   LOG_ROOT   — корень логов (по умолчанию /srv_mproc/mproc/services)
-#   TARGET_DIR — куда писать результат (по умолчанию $HOME/logs)
-#   MIN_AGE    — не используется; зарезервировано
+#   LOG_ROOT          — корень логов (по умолчанию /srv_mproc/mproc/services)
+#   TARGET_DIR        — куда писать результат (по умолчанию $HOME/logs)
+#   LOG_PART          — то же, что аргумент PART (если PART не задан)
+#   SCAN_MODE         — fast (по умолчанию) или full
+#   CONTEXT_BEFORE    — строк до RRN в fast-режиме (по умолчанию 80)
+#   CONTEXT_AFTER     — строк после RRN в fast-режиме (по умолчанию 40)
 #
 # Результат:
 #   $TARGET_DIR/final_composite_log_RRN_<RRN>.txt
@@ -24,9 +34,11 @@ set -euo pipefail
 
 RRN="${1:-}"
 DATE="${2:-}"
+LOG_PART_ARG="${3:-}"
 
 if [[ -z "$RRN" ]]; then
-  echo "Использование: $0 RRN [YYYY-MM-DD]" >&2
+  echo "Использование: $0 RRN [YYYY-MM-DD] [PART]" >&2
+  echo "  PART: * | 01 | 01,02,03  (суффикс вместо _* в имени лога)" >&2
   exit 1
 fi
 
@@ -36,26 +48,62 @@ fi
 
 LOG_ROOT="${LOG_ROOT:-/srv_mproc/mproc/services}"
 TARGET_DIR="${TARGET_DIR:-$HOME/logs}"
+LOG_PART="${LOG_PART_ARG:-${LOG_PART:-*}}"
 TMP_DIR="${TARGET_DIR}/tmp_${RRN}"
 PAIRS_FILE="${TMP_DIR}/trace_pairs.tsv"
-RAW_BLOCKS="${TMP_DIR}/rrn_raw_blocks.txt"
 FINAL_LOG="${TARGET_DIR}/final_composite_log_RRN_${RRN}.txt"
+SCAN_MODE="${SCAN_MODE:-fast}"
+CONTEXT_BEFORE="${CONTEXT_BEFORE:-80}"
+CONTEXT_AFTER="${CONTEXT_AFTER:-40}"
 
-# Пути к архивам логов (добавьте свои сервисы при необходимости)
-mapfile -t SEARCH_PATTERNS < <(cat <<EOF
-${LOG_ROOT}/switch-service/log_arch/switch-service.${DATE}_*.gz
-${LOG_ROOT}/swith-service/log_arch/switch-service.${DATE}_*.gz
-${LOG_ROOT}/stip-service/log_arch/stip-service.${DATE}_*.gz
-${LOG_ROOT}/switch-service/log/switch-service.${DATE}_*.log
-${LOG_ROOT}/switch-service/log_arch/switch-service.${DATE}_*.log
-${LOG_ROOT}/stip-service/log/stip-service.${DATE}_*.log
-${LOG_ROOT}/stip-service/log_arch/stip-service.${DATE}_*.log
-EOF
-)
+# Пути к архивам логов (PART подставляется вместо * в _PART.gz / _PART.log)
+SEARCH_PATTERNS=()
+
+add_patterns_for_suffix() {
+  local suffix="$1"
+  SEARCH_PATTERNS+=(
+    "${LOG_ROOT}/switch-service/log_arch/switch-service.${DATE}_${suffix}.gz"
+    "${LOG_ROOT}/swith-service/log_arch/switch-service.${DATE}_${suffix}.gz"
+    "${LOG_ROOT}/stip-service/log_arch/stip-service.${DATE}_${suffix}.gz"
+    "${LOG_ROOT}/switch-service/log/switch-service.${DATE}_${suffix}.log"
+    "${LOG_ROOT}/switch-service/log_arch/switch-service.${DATE}_${suffix}.log"
+    "${LOG_ROOT}/stip-service/log/stip-service.${DATE}_${suffix}.log"
+    "${LOG_ROOT}/stip-service/log_arch/stip-service.${DATE}_${suffix}.log"
+  )
+}
+
+if [[ -z "$LOG_PART" || "$LOG_PART" == "*" ]]; then
+  add_patterns_for_suffix "*"
+else
+  IFS=',' read -ra LOG_PARTS <<<"$LOG_PART"
+  for part in "${LOG_PARTS[@]}"; do
+    part="${part//[[:space:]]/}"
+    [[ -n "$part" ]] || continue
+    add_patterns_for_suffix "$part"
+  done
+fi
 
 mkdir -p "$TARGET_DIR" "$TMP_DIR"
-rm -f "$PAIRS_FILE" "$RAW_BLOCKS"
+rm -f "$PAIRS_FILE"
 : >"$PAIRS_FILE"
+
+file_contains_rrn() {
+  local f="$1"
+  if [[ "$f" == *.gz ]]; then
+    zgrep -q -F -- "$RRN" "$f" 2>/dev/null
+  else
+    grep -q -F -- "$RRN" "$f" 2>/dev/null
+  fi
+}
+
+grep_rrn_context() {
+  local f="$1"
+  if [[ "$f" == *.gz ]]; then
+    zgrep -F -B "$CONTEXT_BEFORE" -A "$CONTEXT_AFTER" -- "$RRN" "$f" 2>/dev/null || true
+  else
+    grep -F -B "$CONTEXT_BEFORE" -A "$CONTEXT_AFTER" -- "$RRN" "$f" 2>/dev/null || true
+  fi
+}
 
 # -----------------------------------------------------------------------------
 # Раскрыть glob-паттерны в список существующих файлов
@@ -76,7 +124,9 @@ fi
 
 echo "RRN: ${RRN}"
 echo "Дата: ${DATE}"
+echo "Часть лога (PART): ${LOG_PART}"
 echo "Файлов: ${#VALID_FILES[@]}"
+echo "Режим фазы 1: ${SCAN_MODE}"
 echo "TMP: ${TMP_DIR}"
 
 # -----------------------------------------------------------------------------
@@ -116,13 +166,10 @@ function flush_block(b) {
   if (b == "") return
   if (b !~ rrn) return
   extract_trace_pairs(b)
-  print "ARR0\t" fname "\n" b "\n---E---\n" >> raw_file
 }
 BEGIN {
   rrn = ENVIRON["RRN_VAL"]
-  fname = ENVIRON["FNAME"]
   pairs_file = ENVIRON["PAIRS_FILE"]
-  raw_file = ENVIRON["RAW_BLOCKS"]
   b = ""
   RS = "\n"
 }
@@ -146,13 +193,73 @@ END {
 }
 '
 
+extract_pairs_fast_awk='
+function trim(s) {
+  gsub(/^[ \t\r\n]+|[ \t\r\n]+$/, "", s)
+  return s
+}
+function register_pair(svc, t1, t2,   key) {
+  if (t1 == "" || t2 == "") return
+  key = t1 "|||" t2
+  if (!(key in seen)) {
+    seen[key] = 1
+    print t1 "\t" t2 "\t" svc >> pairs_file
+  }
+}
+function extract_trace_pairs(b,   rest, s, n, svc, t1, t2, parts) {
+  rest = b
+  while (match(rest, /\[[^]\n]+\]/)) {
+    s = substr(rest, RSTART + 1, RLENGTH - 2)
+    rest = substr(rest, RSTART + RLENGTH)
+    n = split(s, parts, ",")
+    if (n >= 3) {
+      svc = trim(parts[1])
+      t1 = trim(parts[2])
+      t2 = trim(parts[3])
+      register_pair(svc, t1, t2)
+    }
+  }
+}
+function process_chunk(chunk) {
+  if (chunk == "" || chunk !~ rrn) return
+  extract_trace_pairs(chunk)
+}
+BEGIN {
+  rrn = ENVIRON["RRN_VAL"]
+  pairs_file = ENVIRON["PAIRS_FILE"]
+  chunk = ""
+}
+{
+  if ($0 == "--") {
+    process_chunk(chunk)
+    chunk = ""
+    next
+  }
+  chunk = (chunk == "" ? $0 : chunk "\n" $0)
+}
+END {
+  process_chunk(chunk)
+}
+'
+
 for f in "${VALID_FILES[@]}"; do
-  echo "  [1/3] пары trace: $(basename "$f")"
-  export RRN_VAL="$RRN" FNAME="$f" PAIRS_FILE="$PAIRS_FILE" RAW_BLOCKS="$RAW_BLOCKS"
-  if [[ "$f" == *.gz ]]; then
-    zcat -- "$f" | awk "$extract_pairs_awk"
+  base="$(basename "$f")"
+  if ! file_contains_rrn "$f"; then
+    echo "  [1/3] пропуск (нет RRN): ${base}"
+    continue
+  fi
+
+  echo "  [1/3] пары trace: ${base}"
+  export RRN_VAL="$RRN" PAIRS_FILE="$PAIRS_FILE"
+
+  if [[ "$SCAN_MODE" == "full" ]]; then
+    if [[ "$f" == *.gz ]]; then
+      zcat -- "$f" | awk "$extract_pairs_awk"
+    else
+      awk "$extract_pairs_awk" "$f"
+    fi
   else
-    awk "$extract_pairs_awk" "$f"
+    grep_rrn_context "$f" | awk "$extract_pairs_fast_awk"
   fi
 done
 
