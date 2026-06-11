@@ -68,7 +68,6 @@ add_patterns_for_suffix() {
   local suffix="$1"
   SEARCH_PATTERNS+=(
     "${LOG_ROOT}/switch-service/log_arch/switch-service.${DATE}_${suffix}.gz"
-    "${LOG_ROOT}/swith-service/log_arch/switch-service.${DATE}_${suffix}.gz"
     "${LOG_ROOT}/stip-service/log_arch/stip-service.${DATE}_${suffix}.gz"
     "${LOG_ROOT}/switch-service/log/switch-service.${DATE}_${suffix}.log"
     "${LOG_ROOT}/switch-service/log_arch/switch-service.${DATE}_${suffix}.log"
