@@ -28,8 +28,7 @@
 #   SCAN_MODE              — fast (по умолчанию) или full
 #   CONTEXT_BEFORE         — строк до RRN в фазе 1 (по умолчанию 80)
 #   CONTEXT_AFTER          — строк после RRN в фазе 1 (по умолчанию 40)
-#   TRACE_CONTEXT_BEFORE   — строк до trace в фазе 2 (по умолчанию 120)
-#   TRACE_CONTEXT_AFTER    — строк после trace в фазе 2 (по умолчанию 60)
+# Фаза 2: по trace_id выгружает все строки от даты/trace до следующей даты в логе
 #
 # Результат:
 #   $TARGET_DIR/final_composite_log_RRN_<RRN>.txt
@@ -66,8 +65,6 @@ FINAL_LOG="${TARGET_DIR}/final_composite_log_RRN_${RRN}.txt"
 SCAN_MODE="${SCAN_MODE:-fast}"
 CONTEXT_BEFORE="${CONTEXT_BEFORE:-80}"
 CONTEXT_AFTER="${CONTEXT_AFTER:-40}"
-TRACE_CONTEXT_BEFORE="${TRACE_CONTEXT_BEFORE:-120}"
-TRACE_CONTEXT_AFTER="${TRACE_CONTEXT_AFTER:-60}"
 RRN_HIT_FILES=()
 
 # Пути к логам: archive → log_arch/*.gz | now → log/*.log
@@ -347,149 +344,101 @@ while IFS=$'\t' read -r t1 t2 svc; do
 done <"$PAIRS_FILE"
 
 # -----------------------------------------------------------------------------
-# Фаза 2: один проход по каждому файлу для ВСЕХ пар trace (не зависает без вывода)
+# Фаза 2: один проход по файлу — весь фрагмент от trace до следующей даты
 # -----------------------------------------------------------------------------
-TRACE_IDS_FILE="${TMP_DIR}/trace_ids.txt"
-TRACE_IDS_T2_FILE="${TMP_DIR}/trace_ids_t2.txt"
-cut -f1,2 "$PAIRS_FILE" | tr '\t' '\n' | sort -u >"$TRACE_IDS_FILE"
-cut -f2 "$PAIRS_FILE" | sort -u >"$TRACE_IDS_T2_FILE"
-
 pair_idx=0
 while IFS=$'\t' read -r _ _ _; do
   pair_idx=$((pair_idx + 1))
   : >"${TMP_DIR}/pair_${pair_idx}.tmp"
 done <"$PAIRS_FILE"
 
-grep_ids_context() {
-  local ids_file="$1"
-  local before="$2"
-  local after="$3"
-  local f="$4"
-  if [[ "$f" == *.gz ]]; then
-    zgrep -F -B "$before" -A "$after" -f "$ids_file" -- "$f" 2>/dev/null || true
-  else
-    grep -F -B "$before" -A "$after" -f "$ids_file" -- "$f" 2>/dev/null || true
-  fi
+# Строка с датой открывает новый интервал; всё от trace (и даты перед ним) до
+# следующей даты относится к этому trace.
+extract_trace_segments_awk='
+function is_date_line(s) {
+  return s ~ /^[0-9]{4}-[0-9]{2}-[0-9]{2}[ T]/ ||
+         s ~ /^[0-9]{2}\.[0-9]{2}\.[0-9]{4}/ ||
+         s ~ /^[0-9]{4}\.[0-9]{2}\.[0-9]{2}/ ||
+         s ~ /^[0-9]{2}\/[0-9]{2}\/[0-9]{4}/
 }
-
-file_contains_any_id() {
-  local ids_file="$1"
-  local f="$2"
-  if [[ "$f" == *.gz ]]; then
-    zgrep -q -F -f "$ids_file" -- "$f" 2>/dev/null
-  else
-    grep -q -F -f "$ids_file" -- "$f" 2>/dev/null
-  fi
+function out_path(i) {
+  return tmp_dir "/pair_" i ".tmp"
 }
-
-collect_all_pairs_block_awk='
-function classify_block(b,   i, has_t1, has_t2, out) {
-  if (b == "") return
-  for (i = 1; i <= n; i++) {
-    has_t1 = (index(b, t1[i]) > 0)
-    has_t2 = (index(b, t2[i]) > 0)
-    out = tmp_dir "/pair_" i ".tmp"
-    if (has_t1 && has_t2) {
-      print "ARR1\t" fname "\n" b "\n---E---\n" >> out
-    } else if (has_t2) {
-      print "ARR2\t" fname "\n" b "\n---E---\n" >> out
-    }
-  }
+function flush_pair(i) {
+  if (!capturing[i] || buf[i] == "") return
+  print "SEG\t" fname "\n" buf[i] "\n---E---\n" >> out_path(i)
+  buf[i] = ""
+  capturing[i] = 0
+}
+function flush_all(   i) {
+  for (i = 1; i <= n; i++) flush_pair(i)
+}
+function line_matches_trace(line, i) {
+  return index(line, t1[i]) > 0 || index(line, t2[i]) > 0
 }
 BEGIN {
   tmp_dir = ENVIRON["TMP_DIR"]
   fname = ENVIRON["FNAME"]
+  pending_date = ""
   n = 0
   while ((getline line < ENVIRON["PAIRS_FILE"]) > 0) {
     split(line, p, "\t")
     n++
     t1[n] = p[1]
     t2[n] = p[2]
+    capturing[n] = 0
+    buf[n] = ""
   }
   close(ENVIRON["PAIRS_FILE"])
-  b = ""
 }
 {
   line = $0
-  if (line ~ /^---E---[[:space:]]*$/) {
-    classify_block(b)
-    b = ""
-    next
-  }
-  if (line ~ /^[[:space:]]*$/ && b != "") {
-    classify_block(b)
-    b = ""
-    next
-  }
-  if (b == "") b = line
-  else b = b "\n" line
-}
-END { classify_block(b) }
-'
 
-collect_all_pairs_chunk_awk='
-function classify_chunk(chunk,   i, has_t1, has_t2, out) {
-  if (chunk == "") return
+  if (line ~ /^---E---[[:space:]]*$/) {
+    flush_all()
+    pending_date = ""
+    next
+  }
+
+  if (is_date_line(line)) {
+    flush_all()
+    pending_date = line
+    next
+  }
+
   for (i = 1; i <= n; i++) {
-    has_t1 = (index(chunk, t1[i]) > 0)
-    has_t2 = (index(chunk, t2[i]) > 0)
-    out = tmp_dir "/pair_" i ".tmp"
-    if (has_t1 && has_t2) {
-      print "ARR1\t" fname "\n" chunk "\n---E---\n" >> out
-    } else if (has_t2) {
-      print "ARR2\t" fname "\n" chunk "\n---E---\n" >> out
+    if (!capturing[i] && line_matches_trace(line, i)) {
+      capturing[i] = 1
+      buf[i] = (pending_date != "" ? pending_date "\n" : "") line
+      pending_date = ""
+    } else if (capturing[i]) {
+      buf[i] = buf[i] "\n" line
     }
   }
 }
-BEGIN {
-  tmp_dir = ENVIRON["TMP_DIR"]
-  fname = ENVIRON["FNAME"]
-  n = 0
-  while ((getline line < ENVIRON["PAIRS_FILE"]) > 0) {
-    split(line, p, "\t")
-    n++
-    t1[n] = p[1]
-    t2[n] = p[2]
-  }
-  close(ENVIRON["PAIRS_FILE"])
-  chunk = ""
-}
-{
-  if ($0 == "--") {
-    classify_chunk(chunk)
-    chunk = ""
-    next
-  }
-  chunk = (chunk == "" ? $0 : chunk "\n" $0)
-}
-END { classify_chunk(chunk) }
+END { flush_all() }
 '
+
+read_log_stream() {
+  local f="$1"
+  if [[ "$f" == *.gz ]]; then
+    zcat -- "$f"
+  else
+    cat -- "$f"
+  fi
+}
 
 PHASE2_TOTAL=${#PHASE2_FILES[@]}
 PHASE2_IDX=0
-echo "  [2/3] сбор блоков: ${PAIR_COUNT} пар × ${PHASE2_TOTAL} файлов (один проход на файл)"
+echo "  [2/3] выгрузка trace→след.дата: ${PAIR_COUNT} пар, ${PHASE2_TOTAL} файлов (1 проход/файл)"
 
 for f in "${PHASE2_FILES[@]}"; do
   PHASE2_IDX=$((PHASE2_IDX + 1))
   base="$(basename "$f")"
   echo "  [2/3] ${PHASE2_IDX}/${PHASE2_TOTAL}: ${base} ..."
 
-  if ! file_contains_any_id "$TRACE_IDS_T2_FILE" "$f"; then
-    echo "         пропуск (нет trace_id2)"
-    continue
-  fi
-
   export TMP_DIR FNAME="$f" PAIRS_FILE
-  if [[ "$SCAN_MODE" == "full" ]]; then
-    if [[ "$f" == *.gz ]]; then
-      zcat -- "$f" | awk "$collect_all_pairs_block_awk"
-    else
-      awk "$collect_all_pairs_block_awk" "$f"
-    fi
-  else
-    grep_ids_context "$TRACE_IDS_FILE" "$TRACE_CONTEXT_BEFORE" "$TRACE_CONTEXT_AFTER" "$f" \
-      | awk "$collect_all_pairs_chunk_awk"
-  fi
+  read_log_stream "$f" | awk "$extract_trace_segments_awk"
   echo "         готово"
 done
 
@@ -500,7 +449,7 @@ if [[ "$TMP_COUNT" -eq 0 ]]; then
 fi
 
 # -----------------------------------------------------------------------------
-# Фаза 3: сводный отчёт (как на вашем скрине: ARR1 / ARR2)
+# Фаза 3: сводный отчёт
 # -----------------------------------------------------------------------------
 {
   echo "=== СВОДНЫЙ ЛОГ RRN: ${RRN} ==="
@@ -524,51 +473,25 @@ while IFS=$'\t' read -r TRACE_1 TRACE_2 SERVICE_NAME; do
 
   {
     echo ""
-    echo "--- ПЕРЕСЕЧЕНИЕ (TRACE_1 И TRACE_2 ВМЕСТЕ) ---"
+    echo "--- ВЫГРУЗКА ПО TRACE (от даты/trace до следующей даты) ---"
     echo ""
   } >>"$FINAL_LOG"
 
   awk '
-    BEGIN { RS = "\n---E---\n" }
+    BEGIN { RS = "\n---E---\n"; seg = 0 }
     NF == 0 { next }
     {
-      nl = index($0, "\n")
+      rec = $0
+      sub(/^\n+/, "", rec)
+      if (substr(rec, 1, 4) != "SEG\t") next
+      rec = substr(rec, 5)
+      nl = index(rec, "\n")
       if (nl == 0) next
-      header = substr($0, 1, nl - 1)
-      body = substr($0, nl + 1)
-      tab = index(header, "\t")
-      if (tab == 0) next
-      tg = substr(header, 1, tab - 1)
-      fn = substr(header, tab + 1)
-      if (tg != "ARR1") next
+      fn = substr(rec, 1, nl - 1)
+      body = substr(rec, nl + 1)
+      seg++
       print "----------------------------------------"
-      print "[ИЗ ФАЙЛА: " fn "]"
-      print body
-      print ""
-    }
-  ' "$OUT_TMP" >>"$FINAL_LOG"
-
-  {
-    echo ""
-    echo "--- СКВОЗНАЯ ЦЕПОЧКА (ТОЛЬКО TRACE_2) ---"
-    echo ""
-  } >>"$FINAL_LOG"
-
-  awk '
-    BEGIN { RS = "\n---E---\n" }
-    NF == 0 { next }
-    {
-      nl = index($0, "\n")
-      if (nl == 0) next
-      header = substr($0, 1, nl - 1)
-      body = substr($0, nl + 1)
-      tab = index(header, "\t")
-      if (tab == 0) next
-      tg = substr(header, 1, tab - 1)
-      fn = substr(header, tab + 1)
-      if (tg != "ARR2") next
-      print "----------------------------------------"
-      print "[ИЗ ФАЙЛА: " fn "]"
+      print "[СЕГМЕНТ " seg " | ФАЙЛ: " fn "]"
       print body
       print ""
     }
